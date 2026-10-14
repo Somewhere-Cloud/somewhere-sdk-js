@@ -49,7 +49,16 @@ for (const [name, ref, allowed] of [['allowed', 'refs/heads/master', true], ['re
     encoding: 'utf8',
   });
   assert.equal(run.status === 0, allowed);
-  if (allowed) assert.equal(readFileSync(output, 'utf8'), `source_sha=${head}\n`);
+  if (allowed) {
+    const bytes = readFileSync(output);
+    assert.equal(bytes.includes(92), false, 'GitHub output cannot contain a literal backslash');
+    const lines = bytes.toString('utf8').split(String.fromCharCode(10));
+    assert.equal(lines.length, 2, 'exactly one newline-terminated output line');
+    assert.equal(lines[1], '');
+    const match = /^source_sha=([0-9a-f]{40})$/.exec(lines[0]);
+    assert.ok(match, 'one source_sha key with an exact hexadecimal commit');
+    assert.equal(match[1], head, 'output commits the admitted checkout');
+  }
   else {
     assert.equal(existsSync(output), false, 'refusal cannot emit a publishable SHA');
     assert.match(run.stderr, /Manual publication must run from protected master/);
