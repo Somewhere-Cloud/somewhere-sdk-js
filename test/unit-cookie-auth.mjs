@@ -271,6 +271,8 @@ async function main() {
       'runCookieAction',
       'cookieModeNeedsBackend',
       'runAuthFlow',
+      'sessionMutation',
+      'performSignOut',
     ]);
     const runtimeMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(sw.auth))
       .filter((name) => name !== 'constructor')
@@ -285,6 +287,7 @@ async function main() {
       ['sendMagicLink', 'adapter:POST /api/auth/magic-link'],
       ['verifyMagicLink', 'adapter:POST /api/auth/magic-link/verify'],
       ['signInWithOAuth', 'platform-redirect'],
+      ['completeMfa', 'adapter:POST /api/auth/mfa/challenge'],
       ['signOut', 'adapter:POST /api/auth/logout'],
       ['getSession', 'local'],
       ['getUser', 'adapter:GET /api/auth/me'],

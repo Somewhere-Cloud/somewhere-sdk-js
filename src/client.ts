@@ -233,6 +233,7 @@ export class Client {
       body?: unknown;
       query?: Record<string, unknown>;
       auth?: AuthMode;
+      signal?: AbortSignal;
     } = {},
   ): Promise<T> {
     this.warnOnDirectBrowserDataAccess(path);
@@ -253,7 +254,7 @@ export class Client {
     }
     let res: Response;
     try {
-      res = await this.fetchImpl(url, { method, headers, body });
+      res = await this.fetchImpl(url, { method, headers, body, ...(opts.signal ? { signal: opts.signal } : {}) });
     } catch (err) {
       throw new SomewhereError({
         code: 'NETWORK_ERROR',

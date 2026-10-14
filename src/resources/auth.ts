@@ -1,3 +1,4 @@
+import { authData, isAuthUser, mfaChallenge } from '../auth/continuation.js';
 import type { Client } from '../client.js';
 import { SomewhereError } from '../errors.js';
 import type {
@@ -51,10 +52,25 @@ function loadCachedUser(): User | null {
     if (typeof localStorage === 'undefined') return null;
     const raw = localStorage.getItem(USER_CACHE_KEY);
     const parsed = raw ? (JSON.parse(raw) as User) : null;
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    if (isAuthUser(parsed)) return parsed as User;
+    localStorage.removeItem(USER_CACHE_KEY);
+    return null;
   } catch {
     return null;
   }
+}
+
+interface PendingAuth {
+  token: string | null;
+  generation: number;
+  queue: Promise<unknown>;
+}
+const pendingAuth = new WeakMap<AuthClient, PendingAuth>();
+
+function authFailure(code: string, message: string, status = 400): Result<AuthResponse> {
+  return { data: { user: null, session: null }, error: new SomewhereError({
+    code, message, statusCode: status, retry: false, retryAfterMs: null,
+  }), status };
 }
 
 export class AuthClient {
@@ -71,6 +87,7 @@ export class AuthClient {
   >();
 
   constructor(private readonly client: Client) {
+    pendingAuth.set(this, { token: null, generation: 0, queue: Promise.resolve() });
     if (client.authMode === 'cookie') this.cookieUser = loadCachedUser();
   }
 
@@ -89,6 +106,7 @@ export class AuthClient {
   }
 
   private setCookieUser(next: User | null): void {
+    if (next && !isAuthUser(next)) throw new Error('Auth response did not include a valid user.');
     this.cookieUser = next;
     try {
       if (typeof localStorage === 'undefined') return;
@@ -153,22 +171,18 @@ export class AuthClient {
     email: string;
     password: string;
   }): Promise<Result<AuthResponse>> {
-    if (this.cookieMode) return this.runCookieSessionFlow('/signup', credentials);
-    return this.runAuthFlow('POST', '/auth/signup', {
-      email: credentials.email,
-      password: credentials.password,
-    });
+    return this.sessionMutation((guard, signal) => this.cookieMode
+      ? this.runCookieSessionFlow('/signup', credentials, guard, signal)
+      : this.runAuthFlow('POST', '/auth/signup', credentials, guard, signal));
   }
 
   async signInWithPassword(credentials: {
     email: string;
     password: string;
   }): Promise<Result<AuthResponse>> {
-    if (this.cookieMode) return this.runCookieSessionFlow('/login', credentials);
-    return this.runAuthFlow('POST', '/auth/login', {
-      email: credentials.email,
-      password: credentials.password,
-    });
+    return this.sessionMutation((guard, signal) => this.cookieMode
+      ? this.runCookieSessionFlow('/login', credentials, guard, signal)
+      : this.runAuthFlow('POST', '/auth/login', credentials, guard, signal));
   }
 
   /** Auth-subpath-compatible alias. Result semantics stay SDK-shaped. */
@@ -211,10 +225,9 @@ export class AuthClient {
 
   /** Complete passwordless sign-in; distinct from the legacy password-reset verifyOtp alias. */
   async verifyMagicLink(input: { token: string }): Promise<Result<AuthResponse>> {
-    if (this.cookieMode) {
-      return this.runCookieSessionFlow('/magic-link/verify', { token: input.token });
-    }
-    return this.runAuthFlow('POST', '/auth/magic-link/verify', { token: input.token });
+    return this.sessionMutation((guard, signal) => this.cookieMode
+      ? this.runCookieSessionFlow('/magic-link/verify', { token: input.token }, guard, signal)
+      : this.runAuthFlow('POST', '/auth/magic-link/verify', { token: input.token }, guard, signal));
   }
 
   /**
@@ -254,44 +267,52 @@ export class AuthClient {
     return { data: { provider: 'google', url }, error: null, status: 200 };
   }
 
-  async signOut(): Promise<Result<null>> {
-    if (this.cookieMode) {
-      const had = this.cookieUser !== null;
-      this.setCookieUser(null);
-      // Best-effort server-side revoke + the Set-Cookie expirations that end
-      // the browser session. Never block logout on the network — local state
-      // is already cleared.
+  /** Finish the current sign-in; pending credentials remain private to this instance. */
+  completeMfa(input: { code: string }): Promise<Result<AuthResponse>> {
+    const token = pendingAuth.get(this)!.token;
+    if (!token) return Promise.resolve(authFailure('MFA_CHALLENGE_REQUIRED', 'Start signing in again; there is no pending MFA challenge.'));
+    return this.sessionMutation((guard, signal) => this.cookieMode
+      ? this.runCookieSessionFlow('/mfa/challenge', { mfa_token: token, code: input.code }, guard, signal)
+      : this.runAuthFlow('POST', '/auth/mfa/challenge', { mfa_token: token, code: input.code }, guard, signal), true);
+  }
+
+  signOut(): Promise<Result<null>> {
+    const state = pendingAuth.get(this)!;
+    state.token = null;
+    ++state.generation;
+    const cookie = this.cookieMode;
+    const sessionToken = this.currentSession?.session_token;
+    const hadIdentity = this.cookieUser !== null || this.currentSession !== null;
+    // Clear immediately, but order the server revoke after earlier sign-ins.
+    this.setCookieUser(null);
+    this.currentSession = null;
+    this.client.clearSession();
+    if (hadIdentity) this.emit('SIGNED_OUT');
+    const run = state.queue.then(() => this.performSignOut(cookie, sessionToken));
+    state.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async performSignOut(cookie: boolean, sessionToken?: string): Promise<Result<null>> {
+    if (cookie) {
+      // Preserve the existing best-effort cookie logout Result contract.
       try {
         await this.client.rawFetch(this.client.authPath + '/logout', {
-          method: 'POST',
-          credentials: 'include',
-        } as RequestInit);
-      } catch {
-        /* ignore */
-      }
-      if (had) this.emit('SIGNED_OUT');
+          method: 'POST', credentials: 'include',
+        });
+      } catch { /* local state is already cleared */ }
       return { data: null, error: null, status: 200 };
     }
-    const sessionToken = this.currentSession?.session_token;
     try {
       if (sessionToken) {
         const projectId = this.client.requireProjectId(undefined, 'auth.signOut');
         await this.client.call('POST', '/auth/logout', {
-          auth: 'developer',
-          body: { project_id: projectId, session_token: sessionToken },
+          auth: 'developer', body: { project_id: projectId, session_token: sessionToken },
         });
       }
-      this.currentSession = null;
-      this.client.clearSession();
-      this.emit('SIGNED_OUT');
       return { data: null, error: null, status: 200 };
     } catch (err) {
-      this.currentSession = null;
-      this.client.clearSession();
-      this.emit('SIGNED_OUT');
-      if (err instanceof SomewhereError) {
-        return { data: null, error: err, status: err.statusCode };
-      }
+      if (err instanceof SomewhereError) return { data: null, error: err, status: err.statusCode };
       throw err;
     }
   }
@@ -314,6 +335,7 @@ export class AuthClient {
 
   /** Fetch the current user — `GET /v1/auth/me` (header mode) or the app's own `/me` route (cookie mode). */
   async getUser(): Promise<Result<{ user: User | null }>> {
+    const mine = pendingAuth.get(this)!.generation;
     if (this.cookieMode) {
       // The browser owns the session, so always probe with credentials —
       // the cookie can outlive a cleared cache. A 401 (or explicit null
@@ -324,6 +346,7 @@ export class AuthClient {
           method: 'GET',
           credentials: 'include',
         } as RequestInit);
+        if (mine !== pendingAuth.get(this)!.generation) return { data: { user: this.cookieUser }, error: null, status: 0 };
         if (res.status === 401) {
           if (this.cookieUser) {
             this.setCookieUser(null);
@@ -335,7 +358,10 @@ export class AuthClient {
         const body = (await res.json().catch(() => null)) as
           | { user?: User | null; data?: { user?: User | null } }
           | null;
-        const u = body?.user ?? body?.data?.user ?? null;
+        if (mine !== pendingAuth.get(this)!.generation) return { data: { user: this.cookieUser }, error: null, status: 0 };
+        const candidate = body?.user ?? body?.data?.user ?? null;
+        if (candidate !== null && !isAuthUser(candidate)) return { data: { user: this.cookieUser }, error: new SomewhereError({ code: 'INVALID_AUTH_RESPONSE', message: 'Auth response did not include a valid user.', statusCode: 502, retry: false, retryAfterMs: null }), status: 502 };
+        const u = candidate as User | null;
         const hadUser = this.cookieUser !== null;
         this.setCookieUser(u);
         if (!u && hadUser) this.emit('SIGNED_OUT');
@@ -369,9 +395,14 @@ export class AuthClient {
     access_token: string;
     session_token?: string;
   }): Promise<Result<{ session: Session | null }>> {
+    const state = pendingAuth.get(this)!;
+    state.token = null;
+    const mine = ++state.generation;
     this.client.setSessionToken(session.access_token);
     try {
       const result = await this.client.call<{ user: User }>('GET', '/auth/me');
+      if (mine !== state.generation) throw new SomewhereError({ code: 'AUTH_SUPERSEDED', message: 'A newer sign-in or sign-out replaced this request.', statusCode: 0, retry: false, retryAfterMs: null });
+      if (!isAuthUser(result.user)) throw new SomewhereError({ code: 'INVALID_AUTH_RESPONSE', message: 'Auth response did not include a valid user.', statusCode: 502, retry: false, retryAfterMs: null });
       const fullSession: Session = {
         access_token: session.access_token,
         session_token: session.session_token,
@@ -381,8 +412,10 @@ export class AuthClient {
       this.emit('SIGNED_IN');
       return { data: { session: fullSession }, error: null, status: 200 };
     } catch (err) {
-      this.client.clearSession();
-      this.currentSession = null;
+      if (mine === state.generation) {
+        this.client.clearSession();
+        this.currentSession = null;
+      }
       if (err instanceof SomewhereError) {
         return { data: { session: null }, error: err, status: err.statusCode };
       }
@@ -613,6 +646,38 @@ export class AuthClient {
 
   /* ─── Internal ────────────────────────────────────────────── */
 
+  private sessionMutation(
+    operation: (guard: () => void, signal: AbortSignal) => Promise<Result<AuthResponse>>,
+    completing = false,
+  ): Promise<Result<AuthResponse>> {
+    const state = pendingAuth.get(this)!;
+    if (!completing) state.token = null;
+    const mine = ++state.generation;
+    const run = state.queue.then(async () => {
+      const controller = new AbortController();
+      const guard = () => {
+        if (controller.signal.aborted) throw new SomewhereError({ code: 'AUTH_TIMEOUT', message: 'The auth request timed out. Its server outcome is unknown.', statusCode: 0, retry: false, retryAfterMs: null });
+        if (mine !== state.generation) throw new SomewhereError({ code: 'AUTH_SUPERSEDED', message: 'A newer sign-in or sign-out replaced this request.', statusCode: 0, retry: false, retryAfterMs: null });
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<Result<AuthResponse>>((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(authFailure('AUTH_TIMEOUT', 'The auth request timed out. Its server outcome is unknown.', 0));
+        }, 30_000);
+      });
+      try {
+        guard();
+        return await Promise.race([operation(guard, controller.signal), timeout]);
+      } catch (err) {
+        if (err instanceof SomewhereError) return { data: { user: null, session: null }, error: err, status: err.statusCode };
+        throw err;
+      } finally { clearTimeout(timer); }
+    });
+    state.queue = run.catch(() => undefined);
+    return run;
+  }
+
   /**
    * Cookie-mode sign-in/up: POST to the app's own backend route (same
    * origin), which calls `sw.auth.loginWithCookie` / `signupWithCookie`
@@ -621,8 +686,10 @@ export class AuthClient {
    * `Result` error with the server's real code + message.
    */
   private async runCookieSessionFlow(
-    path: '/login' | '/signup' | '/magic-link/verify',
+    path: '/login' | '/signup' | '/magic-link/verify' | '/mfa/challenge',
     payload: Record<string, unknown>,
+    guard: () => void,
+    signal: AbortSignal,
   ): Promise<Result<AuthResponse>> {
     let res: Response;
     try {
@@ -636,6 +703,7 @@ export class AuthClient {
           'X-Sw-Auth-Mode': 'cookie',
         },
         body: JSON.stringify(payload),
+        signal,
         credentials: 'include',
       } as RequestInit);
     } catch (err) {
@@ -659,6 +727,12 @@ export class AuthClient {
         ? body.data
         : body
     ) as Record<string, unknown> | null;
+    guard();
+    const challenge = mfaChallenge(body);
+    if (challenge) {
+      pendingAuth.get(this)!.token = challenge.mfa_token;
+      return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.', res.status);
+    }
     if (!res.ok) {
       return {
         data: { user: null, session: null },
@@ -668,26 +742,36 @@ export class AuthClient {
           statusCode: res.status,
           retry: res.status >= 500,
           retryAfterMs: null,
-          body,
+          body: d?.mfa_required === true || authData(d?.user)?.mfa_required === true ? undefined : body,
         }),
         status: res.status,
       };
     }
     // The standard cookie handler returns the bare user object; also accept
     // a { user } wrapper.
-    let user = (d?.user ?? (d && typeof d.id === 'string' ? d : null)) as User | null;
+    const candidate = d?.user ?? d;
+    let user = isAuthUser(candidate) ? candidate as unknown as User : null;
+    if (d?.user != null && !user) return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
     // Dual-mode fallback: a backend that replies with tokens (an older or
     // manual handler) didn't set cookies — adopt the pair as a header
     // session so sign-in still works exactly as 0.5.x.
     const access = (d?.token ?? d?.access_token) as string | undefined;
     if (access) {
-      this.client.setSessionToken(access);
       if (!user) {
+        guard();
+        this.client.setSessionToken(access);
         try {
-          const me = await this.client.call<{ user: User }>('GET', '/auth/me');
-          user = me.user;
-        } catch {
-          user = null;
+          const me = await this.client.call<{ user: User }>('GET', '/auth/me', { signal });
+          guard();
+          user = isAuthUser(me.user) ? me.user : null;
+        } catch (err) {
+          guard();
+          this.client.clearSession();
+          throw err;
+        }
+        if (!user) {
+          this.client.clearSession();
+          return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
         }
       }
       const session: Session = {
@@ -697,17 +781,25 @@ export class AuthClient {
         expires_in: d?.expires_in as number | undefined,
         user: user as User,
       };
+      guard();
+      this.client.setSessionToken(access);
       this.currentSession = session;
+      pendingAuth.get(this)!.token = null;
       this.emit('SIGNED_IN');
       return { data: { user, session }, error: null, status: 200 };
     }
     // Cookie session established. If the handler didn't echo the user,
     // fetch it through the cookie that was just set.
     if (!user) {
-      const probe = await this.getUser();
-      user = probe.data?.user ?? null;
+      const probe = await this.client.rawFetch(this.client.authPath + '/me', { method: 'GET', credentials: 'include', signal });
+      const response = authData(await probe.json().catch(() => null));
+      guard();
+      user = probe.ok && isAuthUser(response?.user) ? response.user as unknown as User : null;
     }
+    guard();
+    if (!isAuthUser(user)) return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
     this.setCookieUser(user);
+    pendingAuth.get(this)!.token = null;
     this.emit('SIGNED_IN');
     return { data: { user, session: this.cookieSession() }, error: null, status: 200 };
   }
@@ -792,6 +884,8 @@ export class AuthClient {
     method: 'POST',
     path: string,
     body: Record<string, unknown>,
+    guard: () => void,
+    signal: AbortSignal,
   ): Promise<Result<AuthResponse>> {
     const projectId = this.client.requireProjectId(undefined, `auth${path}`);
     try {
@@ -805,8 +899,17 @@ export class AuthClient {
       }>(method, path, {
         auth: 'developer',
         body: { ...body, project_id: projectId },
+        signal,
       });
+      guard();
+      const challenge = mfaChallenge(result);
+      if (challenge) {
+        pendingAuth.get(this)!.token = challenge.mfa_token;
+        return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.');
+      }
+      if (!isAuthUser(result.user)) return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
       const access = result.access_token ?? result.token;
+      if (!access) return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a session.', 502);
       const session: Session = {
         access_token: access,
         refresh_token: result.refresh_token,
@@ -816,10 +919,17 @@ export class AuthClient {
       };
       this.currentSession = session;
       this.client.setSessionToken(access);
+      pendingAuth.get(this)!.token = null;
       this.emit('SIGNED_IN');
       return { data: { user: result.user, session }, error: null, status: 200 };
     } catch (err) {
       if (err instanceof SomewhereError) {
+        guard();
+        const challenge = mfaChallenge(err.body);
+        if (challenge) {
+          pendingAuth.get(this)!.token = challenge.mfa_token;
+          return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.', err.statusCode);
+        }
         return { data: { user: null, session: null }, error: err, status: err.statusCode };
       }
       throw err;

@@ -1,3 +1,5 @@
+import { mfaChallenge } from './continuation.js';
+
 /**
  * @somewhere-tech/sdk/server — the backend half, so the app writes ~zero auth code.
  *
@@ -40,6 +42,10 @@ export interface SwAuthNamespace {
       password: string,
       opts?: { display_name?: string },
     ): Promise<unknown>;
+    mfa?: {
+      challenge?(opts: { mfa_token: string; code: string }): Promise<unknown>;
+      challengeWithCookie?(opts: { mfa_token: string; code: string }): Promise<unknown>;
+    };
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
     /** Exchanges take the callback's ?code= and its public ?attempt=, which
@@ -182,6 +188,8 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
   // challenge) carries no session and passes through. A pair this runtime
   // cannot put in a cookie is refused, never handed to the caller.
   const sessionResponse = (bundle: unknown): Response => {
+    const challenge = mfaChallenge(bundle);
+    if (challenge) return json(challenge);
     if (tokenMode) return json(bundle);
     const staged = stageSessionCookies(bundle);
     if (staged) return json({ user: staged.user ?? null, cookie_session: true });
@@ -214,7 +222,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
           String(b.password ?? ''),
           { display_name: (b.display_name ?? b.displayName) as string | undefined },
         );
-        return json({ user: unwrapAuthUser(result), cookie_session: true });
+        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true });
       }
       const d = await sw.auth.signup({
         email: String(b.email ?? ''),
@@ -231,10 +239,22 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
           String(b.email ?? ''),
           String(b.password ?? ''),
         );
-        return json({ user: unwrapAuthUser(result), cookie_session: true });
+        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true });
       }
       const d = await sw.auth.login({ email: String(b.email ?? ''), password: String(b.password ?? '') });
       return sessionResponse(d);
+    }
+    if (method === 'POST' && sub === '/mfa/challenge') {
+      const b = await readBody();
+      if (typeof b.mfa_token !== 'string' || !b.mfa_token || typeof b.code !== 'string' || !b.code.trim()) {
+        return json({ error: 'VALIDATION_ERROR', message: 'A pending MFA challenge and code are required.' }, 400);
+      }
+      const complete = wantsCookie ? sw.auth.mfa?.challengeWithCookie : sw.auth.mfa?.challenge;
+      if (!complete) return json({ error: 'MFA_UNAVAILABLE', message: 'This deploy does not support MFA completion. Redeploy with the current runtime.' }, 501);
+      const result = await complete.call(sw.auth.mfa, { mfa_token: b.mfa_token, code: b.code });
+      return wantsCookie
+        ? json({ user: unwrapAuthUser(result), cookie_session: true })
+        : sessionResponse(result);
     }
     if (method === 'POST' && sub === '/logout') {
       // Header mode: the platform revokes a session by its refresh token, which
@@ -396,6 +416,9 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     }
     return json({ error: 'NOT_FOUND', message: `No @somewhere-tech/sdk/auth route for ${method} ${sub}` }, 404);
   } catch (err) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'MFA_REQUIRED' && 'mfa_token' in err && typeof err.mfa_token === 'string' && err.mfa_token) {
+      return json({ mfa_required: true, mfa_token: err.mfa_token });
+    }
     const status = (err as { status?: number })?.status ?? 400;
     return json({ error: 'AUTH_ERROR', message: (err as Error)?.message || 'Auth failed' }, status);
   }

@@ -12,8 +12,9 @@
  * The provider hydrates the user once on mount (validating + refreshing the
  * session) and re-renders on every login / logout / token rotation.
  */
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AuthError,
   createSomewhereAuth,
   type SomewhereAuth,
   type SomewhereAuthOptions,
@@ -307,9 +308,19 @@ export function AuthCallback(props: {
   children?: React.ReactNode;
 }) {
   const auth = useAuth();
+  const started = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const done = (user: User) => {
+    if (props.onDone) props.onDone(user);
+    else window.location.replace('/');
+  };
 
   useEffect(() => {
+    if (started.current) return;
+    started.current = true;
     const code = new URLSearchParams(window.location.search).get('code');
     if (!code) {
       const msg = 'Missing ?code in the callback URL.';
@@ -323,11 +334,12 @@ export function AuthCallback(props: {
         ? auth.completeDiscordSignIn
         : auth.completeGoogleSignIn;
     complete({ code })
-      .then((user) => {
-        if (props.onDone) props.onDone(user);
-        else window.location.replace('/');
-      })
+      .then(done)
       .catch((e: unknown) => {
+        if (e instanceof AuthError && e.code === 'MFA_REQUIRED') {
+          setMfaRequired(true);
+          return;
+        }
         const msg = e instanceof Error ? e.message : 'Sign-in failed.';
         setError(msg);
         props.onError?.(msg);
@@ -335,6 +347,25 @@ export function AuthCallback(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  if (mfaRequired) return (
+    <form className="sw-auth-mfa" onSubmit={(event) => {
+      event.preventDefault();
+      if (busy || !mfaCode.trim()) return;
+      setBusy(true);
+      setError(null);
+      auth.completeMfa({ code: mfaCode.trim() }).then(done).catch((e: unknown) => {
+        const message = e instanceof Error ? e.message : 'Could not complete sign-in.';
+        setError(message);
+        props.onError?.(message);
+      }).finally(() => { setBusy(false); setMfaCode(''); });
+    }}>
+      <label>Authenticator or backup code
+        <input autoComplete="one-time-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} disabled={busy} autoFocus />
+      </label>
+      {error ? <p role="alert">{error}</p> : null}
+      <button type="submit" disabled={busy || !mfaCode.trim()}>{busy ? 'Signing in…' : 'Finish signing in'}</button>
+    </form>
+  );
   if (error) return <>{props.children ?? error}</>;
   return <>{props.children ?? 'Signing you in…'}</>;
 }
