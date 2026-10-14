@@ -1,3 +1,5 @@
+import { isAuthUser, mfaChallenge } from './continuation.js';
+
 /**
  * @somewhere-tech/sdk/auth — framework-agnostic session client.
  *
@@ -251,6 +253,8 @@ export interface SomewhereAuth {
   /** Exchange a Discord `?code=` (from the callback) for a session. Pass the
    *  callback's `?attempt=` too; on the callback page it is read from the URL. */
   completeDiscordSignIn(input: { code: string; attempt?: string }): Promise<User>;
+  /** Complete the pending sign-in with an authenticator or backup code. */
+  completeMfa(input: { code: string }): Promise<User>;
   signOut(): Promise<void>;
   /** Re-fetch the current user from the backend (validates + refreshes). */
   getUser(): Promise<User | null>;
@@ -318,6 +322,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // header-mode session from a pre-0.2.0 install. We adopt it as-is (header
   // transport) so the upgrade logs nobody out; it migrates to cookies on the
   // next sign-in.
+  let pendingMfa: string | null = null;
   let user: User | null = session || preferCookie ? loadUser() : null;
   // A cached user is unverified until the backend answers.
   let status: AuthStatus = session || preferCookie ? 'checking' : 'signed-out';
@@ -361,7 +366,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       const raw = storage.getItem(userKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as User;
-      return parsed && typeof parsed === 'object' ? parsed : null;
+      if (isAuthUser(parsed)) return parsed as User;
+      storage.removeItem(userKey);
+      return null;
     } catch {
       return null;
     }
@@ -409,6 +416,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
   /** A definitive state. An owed sign-out keeps reporting its error. */
   function settle(next: 'authenticated' | 'signed-out', nextUser: User | null) {
+    if (next === 'authenticated' && !isAuthUser(nextUser)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
     writeUser(nextUser);
     status = next;
     error = owedSignOut?.error ?? null;
@@ -576,11 +584,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     const b = body as { user?: unknown; data?: { user?: unknown } };
     const value = 'user' in b ? b.user : b.data && typeof b.data === 'object' && 'user' in b.data ? b.data.user : undefined;
     if (value === null) return null;
-    if (value && typeof value === 'object' && typeof (value as User).id === 'string') return value as User;
+    if (isAuthUser(value)) return value as User;
     return undefined;
   }
 
-  function postForSession(path: string, payload: unknown): Promise<User> {
+  function postForSession(path: string, payload: unknown, completingMfa = false): Promise<User> {
+    if (!completingMfa) pendingMfa = null;
     // Intent: from this call on, earlier checks and updates no longer apply.
     const mine = ++generation;
     const run = enqueue(async (signal) => {
@@ -601,8 +610,14 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),
       });
       const body = (await res.json().catch(() => ({}))) as TokenResponse & { error?: string; message?: string };
-      if (!res.ok) throw new AuthError(body.message || body.error || `Request failed (${res.status})`, res.status);
       stillCurrent();
+      const challenge = mfaChallenge(body);
+      if (challenge) {
+        pendingMfa = challenge.mfa_token;
+        if (status === 'checking') settle('signed-out', null);
+        throw new AuthError('Enter an authenticator or backup code to finish signing in.', res.status, 'MFA_REQUIRED');
+      }
+      if (!res.ok) throw new AuthError(body.message || body.error || `Request failed (${res.status})`, res.status);
       // Cookie handshake confirmed: the backend set the httpOnly pair and the
       // browser owns the session — no tokens in the body, nothing to store.
       // This is also the transparent header→cookie migration point: any legacy
@@ -614,7 +629,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         if (d.user) settle('authenticated', d.user);
         else await checkNow(mine, signal);
         stillCurrent();
-        return user as User;
+        if (!isAuthUser(user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
+        pendingMfa = null;
+        return user;
       }
       // Cookie mode was requested and the server did not confirm it: the
       // handler omitted cookie mode (a pasted or pre-0.2.0 handler). Storing the
@@ -634,18 +651,21 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // for tokens in storage.
       const tokens = pickTokens(body);
       if (!tokens) throw new AuthError('Auth response did not include a session.', res.status);
+      if (tokens.user && !isAuthUser(tokens.user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
       writeSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
       owedSignOut = null;
       if (tokens.user) settle('authenticated', tokens.user);
       else await checkNow(mine, signal);
       stillCurrent();
-      return user as User;
+      if (!isAuthUser(user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
+      pendingMfa = null;
+      return user;
     });
     // Any failure of the current call (server refusal, network, timeout) that
     // invalidated the first check: ask /me so the state leaves 'checking'.
     // A failure after a newer sign-in/out changes nothing.
     return run.catch((e: unknown) => {
-      if (generation === mine && status === 'checking') void getUser();
+      if (generation === mine && status === 'checking' && !(e instanceof AuthError && e.code === 'MFA_REQUIRED')) void getUser();
       throw e;
     });
   }
@@ -776,7 +796,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       return u;
     },
     completeDiscordSignIn: (i) => postForSession('/discord', { code: i.code, ...oauthAttempt(i) }),
+    completeMfa: (input) => {
+      if (!pendingMfa) return Promise.reject(new AuthError('There is no pending MFA sign-in. Start signing in again.', 400, 'MFA_CHALLENGE_REQUIRED'));
+      return postForSession('/mfa/challenge', { mfa_token: pendingMfa, code: input.code }, true);
+    },
     signOut: () => {
+      pendingMfa = null;
       // An owed sign-out is retried with the header session it was for.
       const had = session ?? owedSignOut?.session ?? null;
       // Something to end server-side: an owed sign-out, a header session, a

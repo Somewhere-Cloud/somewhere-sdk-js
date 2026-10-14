@@ -74,6 +74,7 @@ const contract = [
   { client: 'completeGithubSignIn', route: 'POST /api/auth/github', runtime: 'auth.githubExchange' },
   { client: 'discordSignInUrl', route: 'GET /api/auth/discord-url', runtime: 'auth.oauthStart' },
   { client: 'completeDiscordSignIn', route: 'POST /api/auth/discord', runtime: 'auth.discordExchange' },
+  { client: 'completeMfa', route: 'POST /api/auth/mfa/challenge', runtime: 'auth.mfa.challengeWithCookie' },
   { client: 'signOut', route: 'POST /api/auth/logout', runtime: 'auth.logoutWithCookie' },
   { client: 'getUser', route: 'GET /api/auth/me', runtime: 'auth.fromRequest' },
   { client: 'getSession', kind: 'local' },
@@ -111,6 +112,7 @@ const sw = {
     signInWithOtp: called('auth.signInWithOtp', { ok: true }),
     verifyOtp: called('auth.verifyOtp', tokenBundle),
     setSessionCookies: (...args) => runtimeCalls.push({ name: 'auth.setSessionCookies', args }),
+    mfa: { challengeWithCookie: called('auth.mfa.challengeWithCookie', { user }) },
     logoutWithCookie: called('auth.logoutWithCookie', { ok: true }),
     requestEmailVerificationWithCookie: called('auth.requestEmailVerificationWithCookie', { sent: true, code_created: true, expires_in_seconds: 900 }),
     verifyEmailWithCookie: called('auth.verifyEmailWithCookie', { verified: true }),
@@ -168,6 +170,14 @@ const invoke = {
   completeGithubSignIn: () => auth.completeGithubSignIn({ code: 'github-code' }),
   discordSignInUrl: () => auth.discordSignInUrl(),
   completeDiscordSignIn: () => auth.completeDiscordSignIn({ code: 'discord-code' }),
+  completeMfa: async () => {
+    const original = sw.auth.loginWithCookie;
+    sw.auth.loginWithCookie = async () => ({ mfa_required: true, mfa_token: 'matrix-pending' });
+    try { await auth.signIn({ email: user.email, password: 'password' }); } catch (error) {
+      if (error.code !== 'MFA_REQUIRED') throw error;
+    } finally { sw.auth.loginWithCookie = original; }
+    return auth.completeMfa({ code: '123456' });
+  },
   signOut: () => auth.signOut(),
   getUser: () => auth.getUser(),
   getSession: () => auth.getSession(),
