@@ -168,3 +168,33 @@ try {
     console.log('MFA continuation: root header/generation and default React callback PASS');
   } finally {globalThis.window=oldWindow;delete globalThis.__callbackFixture;}
 }
+
+// A legacy cookie handler's token-only response is verified using a private
+// per-request bearer. A hung/late /me never installs a shared credential.
+{
+  const originalTimer = globalThis.setTimeout;
+  let release, reads=0;
+  const root = createClient('https://app.test',undefined,{projectId:'p',authMode:'cookie',headers:{'X-Fixture':'retained'},fetch:async (url,init) => {
+    reads++;
+    if (String(url).endsWith('/login')) return json({token:'fallback-access',refresh_token:'fallback-refresh'});
+    assert.equal(init.headers.Authorization,'Bearer fallback-access');
+    assert.equal(init.headers['X-Fixture'],'retained');
+    return await new Promise(resolve => {release=resolve;});
+  }});
+  // Test the production 30s boundary without waiting 30s or changing options.
+  globalThis.setTimeout=(fn,ms,...args)=>originalTimer(fn,ms === 30_000 ? 5 : ms,...args);
+  try {
+    const result=await root.auth.signIn({email:'e',password:'p'});
+    assert.equal(result.error.code,'AUTH_TIMEOUT');
+    assert.equal((await root.auth.getSession()).data.session,null);
+    const before=reads;
+    assert.equal((await root.auth.updateUser({display_name:'none'})).error.code,'COOKIE_MODE_BACKEND_ROUTE_REQUIRED');
+    assert.equal(reads,before,'no shared bearer adopted before /me verification');
+    release(json({ok:true,data:{user}}));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal((await root.auth.getSession()).data.session,null);
+    assert.equal((await root.auth.updateUser({display_name:'none'})).error.code,'COOKIE_MODE_BACKEND_ROUTE_REQUIRED');
+    assert.equal(reads,before,'late /me cannot adopt a bearer or authenticate');
+    console.log('MFA continuation: hung/late legacy fallback retains caller headers and zero shared credential PASS');
+  } finally {globalThis.setTimeout=originalTimer;}
+}

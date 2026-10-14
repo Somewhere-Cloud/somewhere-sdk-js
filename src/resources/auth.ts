@@ -759,18 +759,15 @@ export class AuthClient {
     if (access) {
       if (!user) {
         guard();
-        this.client.setSessionToken(access);
         try {
-          const me = await this.client.call<{ user: User }>('GET', '/auth/me', { signal });
+          const me = await this.client.call<{ user: User }>('GET', '/auth/me', { auth: 'session', sessionBearer: access, signal });
           guard();
           user = isAuthUser(me.user) ? me.user : null;
         } catch (err) {
           guard();
-          this.client.clearSession();
           throw err;
         }
         if (!user) {
-          this.client.clearSession();
           return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
         }
       }

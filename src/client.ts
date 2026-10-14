@@ -234,12 +234,17 @@ export class Client {
       query?: Record<string, unknown>;
       auth?: AuthMode;
       signal?: AbortSignal;
+      /** Session credential for this request only; never installs client state. */
+      sessionBearer?: string;
     } = {},
   ): Promise<T> {
+    if (opts.sessionBearer !== undefined && opts.auth !== 'session') {
+      throw new Error('A per-request session bearer requires session auth.');
+    }
     this.warnOnDirectBrowserDataAccess(path);
     const url = this.buildUrl(path, opts.query);
     const headers: Record<string, string> = {
-      Authorization: this.authHeader(opts.auth ?? 'dual'),
+      Authorization: opts.sessionBearer === undefined ? this.authHeader(opts.auth ?? 'dual') : `Bearer ${opts.sessionBearer}`,
       Accept: 'application/json',
       ...this.extraHeaders,
     };
