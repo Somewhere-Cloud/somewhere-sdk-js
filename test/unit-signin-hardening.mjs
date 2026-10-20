@@ -88,7 +88,7 @@ for (const [label, body] of [
   check('error is an AuthError', r.error instanceof AuthError, r.error?.name);
   check('error.code is COOKIE_SESSION_NOT_CONFIRMED', r.error?.code === 'COOKIE_SESSION_NOT_CONFIRMED', r.error?.code);
   check('message names the handler fix', /cookie_session: true/.test(r.error?.message ?? '') && /somewhereAuth/.test(r.error?.message ?? ''), r.error?.message);
-  check('nothing written to storage', storage.writes.length === 0, storage.writes);
+  check('no credentials written to storage', !storage.values.has('sw_auth') && !tokenLeaked(storage), storage.writes);
   check('getSession() stays null', auth.getSession() === null);
   check('getCachedUser() stays null', auth.getCachedUser() === null);
 }
@@ -107,9 +107,10 @@ console.log('cookie mode: signUp and magic-link verify refuse the same way');
   const auth = createSomewhereAuth({ mode: 'cookie', storage });
   const up = await auth.signUp({ email: USER.email, password: 'pw' }).catch((e) => e);
   const ml = await auth.verifyMagicLink({ token: 't' }).catch((e) => e);
+  await auth.getUser(); // Drain the queued recovery check before replacing the fetch fixture.
   check('signUp → COOKIE_SESSION_NOT_CONFIRMED', up?.code === 'COOKIE_SESSION_NOT_CONFIRMED');
   check('verifyMagicLink → COOKIE_SESSION_NOT_CONFIRMED', ml?.code === 'COOKIE_SESSION_NOT_CONFIRMED');
-  check('nothing written to storage', storage.writes.length === 0, storage.writes);
+  check('no credentials written to storage', !storage.values.has('sw_auth') && !tokenLeaked(storage), storage.writes);
 }
 
 console.log('cookie mode: a server error still surfaces the server message, not the handshake error');
@@ -127,7 +128,7 @@ console.log('header mode (explicit): token bundle is still stored');
   const auth = createSomewhereAuth({ mode: 'header', storage });
   const r = await signInResult(auth);
   check('signIn resolves the user', r.user?.id === 'u1', r.error?.message);
-  check('header mode asks for tokens explicitly (X-Sw-Auth-Mode: header)', calls[0]?.headers['X-Sw-Auth-Mode'] === 'header');
+  check('header mode asks for tokens explicitly (X-Sw-Auth-Mode: header)', calls.find(c => c.path.endsWith('/login'))?.headers['X-Sw-Auth-Mode'] === 'header');
   check('token pair stored under sw_auth', JSON.parse(storage.values.get('sw_auth') ?? '{}').accessToken === 'acc_jwt');
 }
 

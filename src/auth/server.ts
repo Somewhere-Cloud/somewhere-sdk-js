@@ -48,6 +48,7 @@ export interface SwAuthNamespace {
     };
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
+    refreshSession?(req: Request): Promise<unknown>;
     /** Exchanges take the callback's ?code= and its public ?attempt=, which
      *  selects this browser's attempt cookie; the runtime presents only that
      *  original request cookie and the platform proves it before spending. */
@@ -123,6 +124,7 @@ interface TokenBundle {
   access_token?: string;
   refresh_token?: string;
   user?: unknown;
+  expires_at?: number;
   data?: TokenBundle;
 }
 
@@ -192,7 +194,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (challenge) return json(challenge);
     if (tokenMode) return json(bundle);
     const staged = stageSessionCookies(bundle);
-    if (staged) return json({ user: staged.user ?? null, cookie_session: true });
+    if (staged) return json({ user: staged.user ?? null, cookie_session: true, expires_at: staged.expires_at });
     const b = (bundle ?? {}) as TokenBundle;
     const d = b.data ?? b;
     if (d.token || d.access_token || d.refresh_token) {
@@ -222,7 +224,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
           String(b.password ?? ''),
           { display_name: (b.display_name ?? b.displayName) as string | undefined },
         );
-        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true });
+        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true, expires_at: (result as TokenBundle).expires_at });
       }
       const d = await sw.auth.signup({
         email: String(b.email ?? ''),
@@ -239,7 +241,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
           String(b.email ?? ''),
           String(b.password ?? ''),
         );
-        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true });
+        return mfaChallenge(result) ? json(mfaChallenge(result)) : json({ user: unwrapAuthUser(result), cookie_session: true, expires_at: (result as TokenBundle).expires_at });
       }
       const d = await sw.auth.login({ email: String(b.email ?? ''), password: String(b.password ?? '') });
       return sessionResponse(d);
@@ -253,7 +255,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       if (!complete) return json({ error: 'MFA_UNAVAILABLE', message: 'This deploy does not support MFA completion. Redeploy with the current runtime.' }, 501);
       const result = await complete.call(sw.auth.mfa, { mfa_token: b.mfa_token, code: b.code });
       return wantsCookie
-        ? json({ user: unwrapAuthUser(result), cookie_session: true })
+        ? json({ user: unwrapAuthUser(result), cookie_session: true, expires_at: (result as TokenBundle).expires_at })
         : sessionResponse(result);
     }
     if (method === 'POST' && sub === '/logout') {
@@ -301,6 +303,10 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
         return logoutRefused('SIGN_OUT_UNCONFIRMED', 'Could not confirm sign-out.', 502);
       }
       return json({ ok: true });
+    }
+    if (method === 'POST' && sub === '/refresh') {
+      if (!sw.auth.refreshSession) return json({ error: 'REFRESH_UNAVAILABLE' }, 501);
+      try { return json(await sw.auth.refreshSession(req)); } catch (err) { return verificationFailed(err); }
     }
     if (method === 'GET' && sub === '/me') {
       const user = await sw.auth.fromRequest(req);

@@ -347,6 +347,24 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   let check: { generation: number; promise: Promise<User | null> } | null = null;
   const listeners = new Set<(s: AuthState) => void>();
 
+  let refreshFlight: Promise<void> | null = null;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let nextRefreshAt = 0;
+  const refreshStampKey = userKey + ':refresh-at';
+  const refreshPendingKey = userKey + ':refresh-pending';
+  function beginRefresh() {
+    if (storage.getItem(refreshPendingKey)) throw new AuthError('Another refresh has an unknown outcome. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
+    const marker = String(Date.now()) + ':' + Math.random();
+    storage.setItem(refreshPendingKey, marker);
+    return marker;
+  }
+  function confirmRefresh(marker?: string) { try { if (marker === undefined || storage.getItem(refreshPendingKey) === marker) storage.removeItem(refreshPendingKey); } catch { /* a new sign-in still replaces local credentials */ } }
+  let accessExpiresAt = session ? tokenExpiry(session.accessToken) : 0;
+  let refreshUncertain = false;
+  function tokenExpiry(token: string): number {
+    try { return Number(JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp) * 1000 || 0; }
+    catch { return 0; }
+  }
   function loadSession(): Session | null {
     try {
       const raw = storage.getItem(key);
@@ -387,6 +405,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
    *  code path that writes one token without the other. */
   function writeSession(next: Session | null) {
     session = next;
+    accessExpiresAt = next ? tokenExpiry(next.accessToken) : 0;
     try {
       if (next) storage.setItem(key, JSON.stringify(next));
       else storage.removeItem(key);
@@ -419,6 +438,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (next === 'authenticated' && !isAuthUser(nextUser)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
     writeUser(nextUser);
     status = next;
+    scheduleRefresh();
     error = owedSignOut?.error ?? null;
     emit();
   }
@@ -457,7 +477,15 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
           controller.abort();
           reject(timedOut());
         }, mutationTimeoutMs);
-        task(controller.signal)
+        const execute = () => new Promise<T>((done, fail) => {
+          const abort = () => fail(timedOut());
+          if (controller.signal.aborted) { abort(); return; }
+          controller.signal.addEventListener('abort', abort, { once: true });
+          task(controller.signal).then(done, fail).finally(() => controller.signal.removeEventListener('abort', abort));
+        });
+        const work = typeof navigator !== 'undefined' && navigator.locks
+          ? navigator.locks.request(refreshStampKey, { signal: controller.signal }, execute) : execute();
+        work
           .then(resolve, (e: unknown) => reject(controller.signal.aborted ? timedOut() : e))
           .finally(() => clearTimeout(timer));
       }))
@@ -482,6 +510,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!identityChanged) {
         if (nextSession?.accessToken !== session?.accessToken || nextSession?.refreshToken !== session?.refreshToken) {
           session = nextSession;
+          accessExpiresAt = nextSession ? tokenExpiry(nextSession.accessToken) : 0;
+          scheduleRefresh();
           emit();
         }
         return;
@@ -496,7 +526,69 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     });
   }
 
+  // Standard short access-token refresh. Timers are an optimization: a resumed
+  // client also refreshes before sending protected work. No password is involved.
+  function scheduleRefresh(delay = Math.max(0, accessExpiresAt - Date.now() - 10_000 - Math.random() * 3000)) {
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+    if (status !== 'authenticated' || refreshUncertain) return;
+    nextRefreshAt = Date.now() + delay;
+    if (typeof window === 'undefined') return;
+    refreshTimer = setTimeout(() => { void refreshSession().catch(() => undefined); }, delay);
+  }
+  function refreshSession(): Promise<void> {
+    if (refreshFlight) return refreshFlight;
+    if (refreshUncertain) return Promise.reject(new AuthError('Refresh outcome is unknown. Sign in again to establish a new session.', 0, 'REFRESH_OUTCOME_UNKNOWN'));
+    const started = generation;
+    const run = async (signal: AbortSignal) => {
+      if (started !== generation || status === 'signed-out') return;
+      // Another browser tab may have refreshed while this one awaited the lock.
+      let sharedAt = 0;
+      try { sharedAt = Number(storage.getItem(refreshStampKey)); } catch { /* storage can be unavailable */ }
+      if (Number.isFinite(sharedAt) && sharedAt > Date.now()) {
+        if (!preferCookie) { session = loadSession(); accessExpiresAt = session ? tokenExpiry(session.accessToken) : 0; }
+        scheduleRefresh(Math.max(1000, sharedAt - Date.now()));
+        return;
+      }
+      beginRefresh();
+      const headers: Record<string, string> = { 'X-Sw-Auth-Mode': preferCookie ? 'cookie' : 'header' };
+      if (session) { headers.Authorization = 'Bearer ' + session.accessToken; headers[RIDE_ALONG_HEADER] = session.refreshToken; }
+      const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal });
+      if (started !== generation || signal.aborted) return;
+      if (res.status === 401 || res.status === 403) {
+        confirmRefresh(); writeSession(null); settle('signed-out', null); return;
+      }
+      if (!res.ok) throw new AuthError('Session refresh unavailable.', res.status);
+      const body = await res.json() as TokenResponse & { expires_at?: number };
+      if (started !== generation || signal.aborted) return;
+      if (!preferCookie) {
+        const tokens = pickTokens(body);
+        if (!tokens) throw new AuthError('Refresh did not return credentials.', 502);
+        writeSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
+      }
+      if (body.user) writeUser(body.user);
+      accessExpiresAt = body.expires_at ?? (session ? tokenExpiry(session.accessToken) : 0);
+      if (!Number.isFinite(accessExpiresAt) || accessExpiresAt <= Date.now()) throw new AuthError('Refresh returned an expired access token.', 502);
+      const delay = Math.max(1000, accessExpiresAt - Date.now() - 10_000 - Math.random() * 3000);
+      confirmRefresh();
+      try { storage.setItem(refreshStampKey, String(Date.now() + delay)); } catch { /* memory still works */ }
+      scheduleRefresh(delay);
+    };
+    // Web Locks serialize refresh across same-origin tabs; the existing mutation
+    // queue serializes it against sign-in/out in this client.
+    refreshFlight = enqueue(run).catch((e: unknown) => {
+      if (started === generation) { refreshUncertain = true; indeterminate(0); if (refreshTimer !== undefined) clearTimeout(refreshTimer); }
+      throw e;
+    }).finally(() => { refreshFlight = null; });
+    return refreshFlight;
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', () => { if (status === 'authenticated' && Date.now() >= nextRefreshAt) void refreshSession().catch(() => undefined); });
+  }
+
   const authFetch: typeof fetch = async (input, init = {}) => {
+    if (refreshUncertain) throw new AuthError('Refresh outcome is unknown. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
+    if (refreshFlight) await refreshFlight;
+    else if (pendingMutations === 0 && status === 'authenticated' && Date.now() >= nextRefreshAt) await refreshSession();
     const started = generation;
     // Cookie path: no held tokens — the browser attaches the httpOnly pair
     // and the server refreshes it in-band (re-issued via Set-Cookie). Taken
@@ -592,12 +684,14 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (!completingMfa) pendingMfa = null;
     // Intent: from this call on, earlier checks and updates no longer apply.
     const mine = ++generation;
+    try { storage.removeItem(refreshStampKey); } catch { /* optional cross-tab coordination */ }
     const run = enqueue(async (signal) => {
       // Before any write: a timed-out or superseded call changes nothing.
       const stillCurrent = () => {
         if (signal.aborted) throw timedOut();
         if (generation !== mine) throw superseded();
       };
+      try { storage.removeItem(refreshStampKey); } catch { /* optional cross-tab coordination */ }
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       // Header mode must ASK for tokens: a handler answers a request without
       // the hint with a cookie session only (pfb_e1254f754222).
@@ -623,8 +717,11 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // This is also the transparent header→cookie migration point: any legacy
       // localStorage pair from a pre-0.2.0 install is purged here.
       const d = body.data ?? body;
+      confirmRefresh();
+      refreshUncertain = false;
+      accessExpiresAt = Number((d as { expires_at?: number }).expires_at) || 0;
       if (preferCookie && (d.cookie_session === true || body.cookie_session === true)) {
-        if (session) writeSession(null);
+        if (session) { writeSession(null); accessExpiresAt = Number((d as { expires_at?: number }).expires_at) || 0; }
         owedSignOut = null; // this session replaces the one the owed sign-out was for
         if (d.user) settle('authenticated', d.user);
         else await checkNow(mine, signal);
@@ -653,6 +750,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!tokens) throw new AuthError('Auth response did not include a session.', res.status);
       if (tokens.user && !isAuthUser(tokens.user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
       writeSession({ accessToken: tokens.access, refreshToken: tokens.refresh });
+      accessExpiresAt = Number((d as { expires_at?: number }).expires_at) || accessExpiresAt;
       owedSignOut = null;
       if (tokens.user) settle('authenticated', tokens.user);
       else await checkNow(mine, signal);
@@ -674,6 +772,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
    *  the caller's `signal` (a queued call's deadline) has not fired. */
   async function checkNow(started: number, signal?: AbortSignal): Promise<User | null> {
     const stale = () => started !== generation || signal?.aborted === true;
+    if (refreshUncertain) return user;
     const cookie = !session && preferCookie;
     if (!cookie && !session) {
       if (!stale()) settle('signed-out', null);
@@ -684,8 +783,26 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // Cookie mode: the browser owns the session, so always probe /me with
       // credentials — even with no cached user (the cookie can outlive a
       // cleared cache). Header mode rides authFetch (refresh + rotation).
+      const cookieCheck = async (checkSignal: AbortSignal) => {
+        // /me may rotate an expired cookie. It uses the same cross-tab lock and
+        // durable pending marker as explicit refresh, including page restore.
+        let sharedAt = 0;
+        try { sharedAt = Number(storage.getItem(refreshStampKey)); } catch { /* optional */ }
+        const mayRotate = accessExpiresAt <= Date.now() && sharedAt <= Date.now();
+        const marker = mayRotate ? beginRefresh() : undefined;
+        try {
+          const reply = await fetch(url('/me'), { method: 'GET', credentials: 'include', signal: checkSignal });
+          if (checkSignal.aborted) return reply;
+          if (mayRotate && (reply.ok || reply.status === 401 || reply.status === 403)) confirmRefresh(marker);
+          if (started !== generation) return reply;
+          if (mayRotate && !reply.ok && reply.status !== 401 && reply.status !== 403) refreshUncertain = true;
+          const expiry = Number(reply.headers.get('X-Sw-Access-Expires'));
+          if (Number.isFinite(expiry) && expiry > Date.now()) accessExpiresAt = expiry;
+          return reply;
+        } catch (e) { if (mayRotate && !checkSignal.aborted && started === generation) refreshUncertain = true; throw e; }
+      };
       res = cookie
-        ? await fetch(url('/me'), { method: 'GET', credentials: 'include', signal })
+        ? await (signal ? cookieCheck(signal) : enqueue(cookieCheck))
         : await authFetch(url('/me'), { method: 'GET', signal });
     } catch {
       // Network blip: never a logout. Keep the last-known user, unverified.

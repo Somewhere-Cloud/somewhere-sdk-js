@@ -95,14 +95,15 @@ const called = (name, result) => async (...args) => {
   return typeof result === 'function' ? result(...args) : result;
 };
 const user = { id: 'u1', email: 'person@example.com', entitlements: ['export'] };
-const tokenBundle = { token: 'access', refresh_token: 'refresh', user };
+const expires_at = Date.now() + 60_000;
+const tokenBundle = { token: 'access', refresh_token: 'refresh', user, expires_at };
 
 const sw = {
   auth: {
     signup: called('auth.signup', tokenBundle),
     login: called('auth.login', tokenBundle),
-    signupWithCookie: called('auth.signupWithCookie', user),
-    loginWithCookie: called('auth.loginWithCookie', user),
+    signupWithCookie: called('auth.signupWithCookie', { user, expires_at }),
+    loginWithCookie: called('auth.loginWithCookie', { user, expires_at }),
     logout: called('auth.logout', { ok: true }),
     fromRequest: called('auth.fromRequest', user),
     oauthStart: called('auth.oauthStart', (provider) => `https://${provider}.example/authorize`),
@@ -112,7 +113,7 @@ const sw = {
     signInWithOtp: called('auth.signInWithOtp', { ok: true }),
     verifyOtp: called('auth.verifyOtp', tokenBundle),
     setSessionCookies: (...args) => runtimeCalls.push({ name: 'auth.setSessionCookies', args }),
-    mfa: { challengeWithCookie: called('auth.mfa.challengeWithCookie', { user }) },
+    mfa: { challengeWithCookie: called('auth.mfa.challengeWithCookie', { user, expires_at }) },
     logoutWithCookie: called('auth.logoutWithCookie', { ok: true }),
     requestEmailVerificationWithCookie: called('auth.requestEmailVerificationWithCookie', { sent: true, code_created: true, expires_in_seconds: 900 }),
     verifyEmailWithCookie: called('auth.verifyEmailWithCookie', { verified: true }),
