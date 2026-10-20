@@ -1,6 +1,6 @@
 {
   "name": "@somewhere-tech/sdk",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "description": "Official JavaScript/TypeScript SDK for the somewhere.tech platform API.",
   "keywords": [
     "somewhere",
