@@ -348,6 +348,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   const listeners = new Set<(s: AuthState) => void>();
 
   let refreshFlight: Promise<void> | null = null;
+  // True while the in-flight refresh was started in the background (timer or focus), while the
+  // held access token was still valid. Requests then need not wait for it (see authFetch).
+  let refreshInBackground = false;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let nextRefreshAt = 0;
   const refreshStampKey = userKey + ':refresh-at';
@@ -533,9 +536,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (status !== 'authenticated' || refreshUncertain) return;
     nextRefreshAt = Date.now() + delay;
     if (typeof window === 'undefined') return;
-    refreshTimer = setTimeout(() => { void refreshSession().catch(() => undefined); }, delay);
+    refreshTimer = setTimeout(() => { void refreshSession(true).catch(() => undefined); }, delay);
   }
-  function refreshSession(): Promise<void> {
+  function refreshSession(background = false): Promise<void> {
     if (refreshFlight) return refreshFlight;
     if (refreshUncertain) return Promise.reject(new AuthError('Refresh outcome is unknown. Sign in again to establish a new session.', 0, 'REFRESH_OUTCOME_UNKNOWN'));
     const started = generation;
@@ -575,21 +578,55 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     };
     // Web Locks serialize refresh across same-origin tabs; the existing mutation
     // queue serializes it against sign-in/out in this client.
+    refreshInBackground = background;
     refreshFlight = enqueue(run).catch((e: unknown) => {
       if (started === generation) { refreshUncertain = true; indeterminate(0); if (refreshTimer !== undefined) clearTimeout(refreshTimer); }
       throw e;
-    }).finally(() => { refreshFlight = null; });
+    }).finally(() => { refreshFlight = null; refreshInBackground = false; });
     return refreshFlight;
   }
   if (typeof window !== 'undefined') {
-    window.addEventListener('focus', () => { if (status === 'authenticated' && Date.now() >= nextRefreshAt) void refreshSession().catch(() => undefined); });
+    window.addEventListener('focus', () => { if (status === 'authenticated' && Date.now() >= nextRefreshAt) void refreshSession(true).catch(() => undefined); });
   }
 
-  const authFetch: typeof fetch = async (input, init = {}) => {
+  // A background refresh starts while the held access token is still valid (10-13 s before
+  // expiry). A read sent meanwhile need not wait for it: it goes out on the still-valid token
+  // with X-No-Auto-Refresh (and no ride-along refresh token), so the server can never rotate the
+  // refresh credential the background refresh is already rotating, and the response carries no
+  // pair that could overwrite the new one. If the token is rejected anyway (clock skew), the read
+  // waits for the refresh to settle and is sent ONCE more the normal way; it is never treated as
+  // a sign-out while the refresh is pending. Only GET/HEAD qualify: a mutation still waits, so a
+  // mutation is never sent twice. A demand refresh (token expired or about to be) still blocks.
+  const CONCURRENT_READ_MIN_MS = 5_000;
+  const authFetch: typeof fetch = (input, init = {}) => send(input, init, true);
+  const sendDuringRefresh = (input: RequestInfo | URL, init: RequestInit): Promise<Response> => {
+    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set('X-No-Auto-Refresh', '1');
+    headers.delete(RIDE_ALONG_HEADER);
+    const target = input instanceof Request ? input.clone() : (input as RequestInfo);
+    // Cookie transport: the browser attaches the cookies; the opt-out keeps the server from
+    // rotating them in-band, so no Set-Cookie can race the background refresh.
+    if (preferCookie && !session) return fetch(target, { credentials: 'include', ...init, headers });
+    if (session) headers.set('Authorization', `Bearer ${session.accessToken}`);
+    return fetch(target, { ...init, headers });
+  };
+  const send = async (input: RequestInfo | URL, init: RequestInit = {}, mayOverlapRefresh: boolean): Promise<Response> => {
     if (refreshUncertain) throw new AuthError('Refresh outcome is unknown. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
-    if (refreshFlight) await refreshFlight;
-    else if (pendingMutations === 0 && status === 'authenticated' && Date.now() >= nextRefreshAt) await refreshSession();
+    const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const flight = refreshFlight;
+    const overlap = mayOverlapRefresh && flight !== null && refreshInBackground
+      && (method === 'GET' || method === 'HEAD')
+      && Number.isFinite(accessExpiresAt) && accessExpiresAt - Date.now() >= CONCURRENT_READ_MIN_MS;
+    if (flight && !overlap) await flight;
+    else if (!flight && pendingMutations === 0 && status === 'authenticated' && Date.now() >= nextRefreshAt) await refreshSession();
     const started = generation;
+    if (overlap && flight) {
+      const res = await sendDuringRefresh(input, init);
+      if (res.status !== 401) return res;
+      await flight.catch(() => undefined);
+      if (started !== generation) return res;
+      return send(input, init, false);
+    }
     // Cookie path: no held tokens — the browser attaches the httpOnly pair
     // and the server refreshes it in-band (re-issued via Set-Cookie). Taken
     // only when no header session exists, so an adopted pre-0.2.0 session
