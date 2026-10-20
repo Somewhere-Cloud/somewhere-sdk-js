@@ -18,7 +18,7 @@ const check = (name, cond, detail) => {
 
 const A = { id: 'usr_a', email: 'a@example.com' };
 const B = { id: 'usr_b', email: 'b@example.com' };
-const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const json = (status, body) => new Response(JSON.stringify(body?.cookie_session || body?.token ? { ...body, expires_at: Date.now()+60_000 } : body), { status, headers: { 'Content-Type': 'application/json', ...(status === 200 && body?.user ? { 'X-Sw-Access-Expires': String(Date.now()+60_000) } : {}) } });
 const raw = (status, text) => new Response(text, { status, headers: { 'Content-Type': 'application/json' } });
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -136,8 +136,9 @@ for (const [label, respond, code] of [
   const auth = createSomewhereAuth();
   const pending = auth.getUser();
   await tick();
-  await auth.signOut();
+  const signOut = auth.signOut();
   me.resolve(json(200, { user: A }));
+  await signOut;
   await pending;
   check('R1: a late /me cannot restore a signed-out user', auth.getState().status === 'signed-out' && auth.getCachedUser() === null);
 }
@@ -149,8 +150,9 @@ for (const [label, respond, code] of [
   const auth = createSomewhereAuth();
   const pending = auth.getUser();
   await tick();
-  await auth.signIn({ email: B.email, password: 'pw' });
+  const signIn = auth.signIn({ email: B.email, password: 'pw' });
   me.resolve(json(200, { user: null }));
+  await signIn;
   await pending;
   check('R2: a late signed-out /me cannot wipe a newer sign-in', auth.getState().status === 'authenticated' && auth.getCachedUser()?.id === 'usr_b');
 }
@@ -166,9 +168,10 @@ for (const [label, respond, code] of [
   const auth = createSomewhereAuth();
   const pending = auth.getUser();
   await tick();
-  await auth.signOut();
-  await auth.signIn({ email: B.email, password: 'pw' });
+  const signOut = auth.signOut();
+  const signIn = auth.signIn({ email: B.email, password: 'pw' });
   me.resolve(json(200, { user: A }));
+  await signOut; await signIn;
   await pending;
   check('R2b: a late /me for A cannot replace B', auth.getCachedUser()?.id === 'usr_b' && auth.getState().status === 'authenticated');
 }
@@ -270,8 +273,9 @@ for (const [label, respond, code] of [
   const auth = createSomewhereAuth();
   const first = auth.getUser();
   await tick();
-  await settled(auth.signIn({ email: A.email, password: 'bad' }));
+  const badSignIn = settled(auth.signIn({ email: A.email, password: 'bad' }));
   me.resolve(json(200, { user: A }));
+  await badSignIn;
   await first;
   for (let i = 0; i < 5 && auth.getState().status === 'checking'; i++) await tick();
   check('a failed sign-in re-checks instead of staying "checking"', auth.getState().status === 'authenticated' && meCalls === 2, { status: auth.getState().status, meCalls });
