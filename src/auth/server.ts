@@ -125,7 +125,28 @@ interface TokenBundle {
   refresh_token?: string;
   user?: unknown;
   expires_at?: number;
+  expires_in?: number;
   data?: TokenBundle;
+}
+
+/**
+ * When the session just issued expires, in epoch ms: the runtime's expires_at; else the `exp` of the
+ * access token actually issued; else the issuer's expires_in. Every cookie-mode session reply carries
+ * it, so the client schedules its refresh from the real expiry. A reply without one made the client
+ * refresh at once, and a page change mid-refresh orphaned its pending marker (platform
+ * pfb_01e440702f31). Undefined only when the bundle says nothing about expiry.
+ */
+function issuedExpiresAt(d: TokenBundle): number | undefined {
+  if (typeof d.expires_at === 'number' && Number.isFinite(d.expires_at) && d.expires_at > 0) return d.expires_at;
+  const access = d.token ?? d.access_token;
+  if (typeof access === 'string') {
+    try {
+      const exp = Number(JSON.parse(atob(access.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp);
+      if (Number.isFinite(exp) && exp > 0) return exp * 1000;
+    } catch { /* not a JWT: fall through to expires_in */ }
+  }
+  if (typeof d.expires_in === 'number' && Number.isFinite(d.expires_in) && d.expires_in > 0) return Date.now() + d.expires_in * 1000;
+  return undefined;
 }
 
 /**
@@ -194,7 +215,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (challenge) return json(challenge);
     if (tokenMode) return json(bundle);
     const staged = stageSessionCookies(bundle);
-    if (staged) return json({ user: staged.user ?? null, cookie_session: true, expires_at: staged.expires_at });
+    if (staged) return json({ user: staged.user ?? null, cookie_session: true, expires_at: issuedExpiresAt(staged) });
     const b = (bundle ?? {}) as TokenBundle;
     const d = b.data ?? b;
     if (d.token || d.access_token || d.refresh_token) {

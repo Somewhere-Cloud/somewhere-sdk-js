@@ -78,7 +78,17 @@ try {
   await assert.rejects(tabA.fetch('https://app.test/data'));
   await assert.rejects(tabB.fetch('https://app.test/data'));
   const tabC=createSomewhereAuth({mode:'cookie',storage:shared,baseUrl:'https://app.test'});
-  await tabC.getUser();assert.equal(attempts,1,'other tabs cannot replay an uncertain rotation');
+  // Tab C may reconcile, but only with a /me that cannot rotate (pfb_01e440702f31): no ride-along
+  // refresh token and X-No-Auto-Refresh. It never sends /refresh or a rotating /me.
+  const probes=[];
+  globalThis.fetch=async(input,init={})=>{attempts++;probes.push({path:new URL(String(input),'https://app.test').pathname,headers:new Headers(init.headers)});throw new TypeError('still offline');};
+  await tabC.getUser();
+  assert.equal(attempts,2,'one reconciliation probe, nothing else');
+  assert.equal(probes[0].path,'/api/auth/me');
+  assert.equal(probes[0].headers.get('X-No-Auto-Refresh'),'1','other tabs cannot replay an uncertain rotation');
+  assert.equal(probes[0].headers.get('X-Refresh-Token'),null);
+  assert.equal(tabC.getState().status,'indeterminate','an unanswered probe is never a sign-out');
+  assert.ok(shared.getItem('sw_auth_user:refresh-pending'),'the marker stays until the outcome is resolved');
   // Fresh sign-in is the recovery path and clears shared uncertainty.
   globalThis.fetch=async()=>response({...body,expires_at:now+60_000});
   await tabC.signIn({email:user.email,password:'test'});assert.equal(shared.getItem('sw_auth_user:refresh-pending'),null);

@@ -361,6 +361,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     storage.setItem(refreshPendingKey, marker);
     return marker;
   }
+  /** A pending marker seen while holding the refresh lock belongs to no live refresh: one that was
+   *  cut off (a page change or crash mid-request), so its rotation may or may not have committed. */
+  function refreshOrphaned(): boolean { try { return storage.getItem(refreshPendingKey) !== null; } catch { return false; } }
   function confirmRefresh(marker?: string) { try { if (marker === undefined || storage.getItem(refreshPendingKey) === marker) storage.removeItem(refreshPendingKey); } catch { /* a new sign-in still replaces local credentials */ } }
   let accessExpiresAt = session ? tokenExpiry(session.accessToken) : 0;
   let refreshUncertain = false;
@@ -531,9 +534,15 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
   // Standard short access-token refresh. Timers are an optimization: a resumed
   // client also refreshes before sending protected work. No password is involved.
-  function scheduleRefresh(delay = Math.max(0, accessExpiresAt - Date.now() - 10_000 - Math.random() * 3000)) {
+  function scheduleRefresh(delay?: number) {
     if (refreshTimer !== undefined) clearTimeout(refreshTimer);
     if (status !== 'authenticated' || refreshUncertain) return;
+    // An unknown expiry is not an expired one: refreshing at once raced the page change that follows
+    // a sign-in (pfb_01e440702f31). The next session check learns the expiry (X-Sw-Access-Expires).
+    if (delay === undefined) {
+      if (!(accessExpiresAt > 0)) { nextRefreshAt = Number.POSITIVE_INFINITY; return; }
+      delay = Math.max(0, accessExpiresAt - Date.now() - 10_000 - Math.random() * 3000);
+    }
     nextRefreshAt = Date.now() + delay;
     if (typeof window === 'undefined') return;
     refreshTimer = setTimeout(() => { void refreshSession(true).catch(() => undefined); }, delay);
@@ -611,7 +620,14 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return fetch(target, { ...init, headers });
   };
   const send = async (input: RequestInfo | URL, init: RequestInit = {}, mayOverlapRefresh: boolean): Promise<Response> => {
-    if (refreshUncertain) throw new AuthError('Refresh outcome is unknown. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
+    if (refreshUncertain) {
+      if (status !== 'authenticated') throw new AuthError('Refresh outcome is unknown. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
+      // Reconciled: the held access token still answers, but the refresh credential behind it may
+      // have rotated, so it is used as is and never rotated. When it runs out, re-check the session.
+      const res = await sendDuringRefresh(input, init);
+      if (res.status === 401) void getUser();
+      return res;
+    }
     const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
     const flight = refreshFlight;
     const overlap = mayOverlapRefresh && flight !== null && refreshInBackground
@@ -809,13 +825,14 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
    *  the caller's `signal` (a queued call's deadline) has not fired. */
   async function checkNow(started: number, signal?: AbortSignal): Promise<User | null> {
     const stale = () => started !== generation || signal?.aborted === true;
-    if (refreshUncertain) return user;
+    if (refreshUncertain) return reconcileUnknownRefresh(started, signal);
     const cookie = !session && preferCookie;
     if (!cookie && !session) {
       if (!stale()) settle('signed-out', null);
       return null;
     }
     let res: Response;
+    let orphaned = false;
     try {
       // Cookie mode: the browser owns the session, so always probe /me with
       // credentials — even with no cached user (the cookie can outlive a
@@ -826,6 +843,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         let sharedAt = 0;
         try { sharedAt = Number(storage.getItem(refreshStampKey)); } catch { /* optional */ }
         const mayRotate = accessExpiresAt <= Date.now() && sharedAt <= Date.now();
+        if (mayRotate && refreshOrphaned()) { orphaned = true; return probeWithoutRotation(checkSignal); }
         const marker = mayRotate ? beginRefresh() : undefined;
         try {
           const reply = await fetch(url('/me'), { method: 'GET', credentials: 'include', signal: checkSignal });
@@ -842,11 +860,14 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         ? await (signal ? cookieCheck(signal) : enqueue(cookieCheck))
         : await authFetch(url('/me'), { method: 'GET', signal });
     } catch {
+      // A refresh with an unknown outcome surfaced here: reconcile it now rather than on a later call.
+      if (!stale() && refreshUncertain) return reconcileUnknownRefresh(started, signal);
       // Network blip: never a logout. Keep the last-known user, unverified.
       if (!stale()) indeterminate(0);
       return user;
     }
     if (stale()) return user;
+    if (orphaned) return settleReconciled(res, started, signal);
     // 401 or an explicit { user: null } is DEFINITIVE signed-out, which also
     // settles an owed sign-out: the server holds no session for this browser.
     if (res.status === 401) {
@@ -870,6 +891,58 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     owedSignOut = null;
     settle(u ? 'authenticated' : 'signed-out', u);
     return u;
+  }
+
+  /** /me that can never rotate: no ride-along refresh token, and X-No-Auto-Refresh, so the server
+   *  answers from the held access credential alone. */
+  function probeWithoutRotation(probeSignal: AbortSignal): Promise<Response> {
+    const headers: Record<string, string> = { 'X-No-Auto-Refresh': '1' };
+    if (session) headers.Authorization = 'Bearer ' + session.accessToken;
+    return fetch(url('/me'), { method: 'GET', credentials: 'include', headers, signal: probeSignal });
+  }
+
+  /** An earlier refresh's outcome is unknown: it may have rotated the refresh credential, and
+   *  replaying a rotated one past the server's grace revokes every session of the user. So the state
+   *  is reconciled without rotating: a still-valid access credential keeps the user signed in (used,
+   *  never rotated, until it runs out); one that no longer answers cannot be confirmed safely, so the
+   *  dead local marker and session are cleared and a sign-in is asked for. A failed check stays
+   *  indeterminate and the next getUser() checks again, never a permanent no-op. */
+  async function reconcileUnknownRefresh(started: number, signal?: AbortSignal): Promise<User | null> {
+    const stale = () => started !== generation || signal?.aborted === true;
+    refreshUncertain = true;
+    let res: Response;
+    try { res = await (signal ? probeWithoutRotation(signal) : enqueue(probeWithoutRotation)); }
+    catch { if (!stale()) indeterminate(0); return user; }
+    if (stale()) return user;
+    return settleReconciled(res, started, signal);
+  }
+
+  async function settleReconciled(res: Response, started: number, signal?: AbortSignal): Promise<User | null> {
+    const stale = () => started !== generation || signal?.aborted === true;
+    refreshUncertain = true;
+    if (res.status !== 401 && !res.ok) { indeterminate(res.status); return user; }
+    const u = res.status === 401 ? null : readUser(await res.json().catch(() => undefined));
+    if (stale()) return user;
+    if (u === undefined) { indeterminate(res.status); return user; }
+    if (u) {
+      const expiry = Number(res.headers.get('X-Sw-Access-Expires'));
+      if (Number.isFinite(expiry) && expiry > Date.now()) accessExpiresAt = expiry;
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+      writeUser(u);
+      status = 'authenticated';
+      error = null;
+      emit();
+      return u;
+    }
+    confirmRefresh();
+    refreshUncertain = false;
+    writeSession(null);
+    owedSignOut = null;
+    writeUser(null);
+    status = 'signed-out';
+    error = new AuthError('Your sign-in could not be confirmed. Sign in again.', 401, 'SIGN_IN_REQUIRED');
+    emit();
+    return null;
   }
 
   /** Validate the session against /me. Runs after queued sign-ins/outs and is
