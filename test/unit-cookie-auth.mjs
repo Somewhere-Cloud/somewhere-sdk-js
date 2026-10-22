@@ -332,7 +332,7 @@ async function main() {
       logout.rec.calls.at(-1).method === 'POST' && logout.rec.calls.at(-1).url === '/api/auth/logout');
   }
 
-  /* ── browser data warning: names the refusal and the supported routes ─ */
+  /* ── browser data warning: states the contract and the supported routes ─ */
   console.log('browser direct-data warnings');
   {
     globalThis.document = {};
@@ -355,9 +355,9 @@ async function main() {
     console.warn = originalWarn;
     delete globalThis.document;
 
-    const dbWarning = warnings.find((message) => /legacy database endpoints are refused/.test(message));
-    const fsWarnings = warnings.filter((message) => /legacy files endpoints are refused/.test(message));
-    check('direct browser database call warns that the legacy endpoints are refused',
+    const dbWarning = warnings.find((message) => /Direct browser database API calls are disabled/.test(message));
+    const fsWarnings = warnings.filter((message) => /Direct browser file API calls are disabled/.test(message));
+    check('direct browser database call warns that it is disabled and names the supported routes',
       !!dbWarning && /somewhere:data/.test(dbWarning) && /declared data rules/.test(dbWarning) && /sw\.db/.test(dbWarning));
     check('direct browser files call warns once, naming somewhere:files and sw.fs',
       fsWarnings.length === 1 && /somewhere:files/.test(fsWarnings[0]) && /sw\.fs/.test(fsWarnings[0]));
@@ -366,8 +366,8 @@ async function main() {
         && rec.calls.some((call) => call.url.includes('/db/query')));
     check('same-origin functions.invoke stays warning-free',
       warnings.length === warningCountBeforeFunction && functionResult.error === null);
-    check('no warning claims working compatibility',
-      warnings.every((message) => !/still works|deprecated compatibility/i.test(message)));
+    check('no warning says the call still works',
+      warnings.every((message) => !/still works/i.test(message)));
   }
 
   /* ── advanced/manual mode is untouched ──────────────────────────── */

@@ -9,15 +9,14 @@ last feature/breaking bump), the **minor** version is the breaking lever until
 ## Unreleased
 
 ### Fixed
-- The one-time browser warning for direct database/files calls no longer
-  claims a "deprecated compatibility mode" in which "this call still works".
-  The platform refuses direct browser-session calls to those legacy endpoints
-  (database: 403 `BROWSER_DB_ACCESS_REMOVED`). The warning now points to the
-  supported routes: the generated `somewhere:data` client under declared data
-  rules, or a server function using `sw.db`; for files, a declared
-  `somewhere:files` collection, or a server function using `sw.fs`. Request
-  behaviour is unchanged: the SDK still sends the call and returns the
-  server's answer as a Result.
+- The one-time browser warning for direct database/file calls now states the
+  current contract: direct browser database and file API calls are disabled
+  (database: 403 `BROWSER_DB_ACCESS_REMOVED`). Use the generated
+  `somewhere:data` client under declared data rules or a server function using
+  `sw.db`; for files, a declared `somewhere:files` collection or a server
+  function using `sw.fs`. Server-side use is unaffected, and request
+  behaviour is unchanged: the SDK sends the call and returns the server's
+  answer as a Result.
 
 ## 0.12.0 (2026-10-06) — browser-bound social sign-in (platform tsk_ec24c4ba)
 

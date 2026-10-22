@@ -366,11 +366,11 @@ export class Client {
   }
 
   /**
-   * The platform refuses direct browser-session calls to its legacy database
-   * and files endpoints (the database router answers 403
-   * BROWSER_DB_ACCESS_REMOVED). This one-time warning names the supported
-   * routes. It does not block or alter the request: the server decides, and
-   * the caller gets that answer as a normal Result.
+   * Direct browser calls to the platform's database and file APIs are
+   * disabled; browser code uses declared data/file collections or a server
+   * function. This one-time warning says so. It does not block or alter the
+   * request: the server decides, and the caller gets that answer as a normal
+   * Result. Server-side use of these APIs is unaffected.
    */
   private warnOnDirectBrowserDataAccess(path: string): void {
     if (typeof document === 'undefined') return;
@@ -384,12 +384,11 @@ export class Client {
     this.browserDataWarnings.add(surface);
     globalThis.console?.warn?.(
       surface === 'database'
-        ? '[@somewhere-tech/sdk] Direct browser calls to the legacy database endpoints are refused. ' +
+        ? '[@somewhere-tech/sdk] Direct browser database API calls are disabled. ' +
             'Use the generated somewhere:data client for operations allowed by your declared data rules, ' +
             'or call a server function that uses sw.db.'
-        : '[@somewhere-tech/sdk] Direct browser calls to the legacy files endpoints are refused. ' +
-            'Use a declared somewhere:files collection for files your declared rules allow, ' +
-            'or call a server function that uses sw.fs.',
+        : '[@somewhere-tech/sdk] Direct browser file API calls are disabled. ' +
+            'Use a declared somewhere:files collection, or call a server function that uses sw.fs.',
     );
   }
 
