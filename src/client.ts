@@ -67,8 +67,8 @@ export class Client {
   private sessionAuthHeader: string | null = null;
   private readonly fetchImpl: FetchLike;
   private readonly extraHeaders: Record<string, string>;
-  /** Rule-9 warning state: existing browser data calls keep working, but each
-   * compatibility surface teaches the server-function migration once. */
+  /** Surfaces already warned about. Direct browser database and file API calls are disabled;
+   * each surface warns once. */
   private readonly browserDataWarnings = new Set<'database' | 'files'>();
   /**
    * Instance-scoped query cache for `from().select()`, or `null` when the
