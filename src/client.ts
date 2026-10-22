@@ -366,10 +366,11 @@ export class Client {
   }
 
   /**
-   * Direct browser database/files calls are a deprecated compatibility mode.
-   * Rule 9 requires warn-first plus a working migration path: never reject or
-   * alter the request here. The same call continues immediately after the
-   * one-time warning.
+   * Direct browser calls to the platform's database and file APIs are
+   * disabled; browser code uses declared data/file collections or a server
+   * function. This one-time warning says so. It does not block or alter the
+   * request: the server decides, and the caller gets that answer as a normal
+   * Result. Server-side use of these APIs is unaffected.
    */
   private warnOnDirectBrowserDataAccess(path: string): void {
     if (typeof document === 'undefined') return;
@@ -381,11 +382,13 @@ export class Client {
           : null;
     if (!surface || this.browserDataWarnings.has(surface)) return;
     this.browserDataWarnings.add(surface);
-    const runtime = surface === 'database' ? 'sw.db' : 'sw.fs';
     globalThis.console?.warn?.(
-      `[@somewhere-tech/sdk] Direct browser ${surface} access is a deprecated compatibility mode. ` +
-        `This call still works. New browser apps should call a same-origin server function that uses ` +
-        `${runtime}, then invoke that function with the cookie session. See platform_help('auth-client').`,
+      surface === 'database'
+        ? '[@somewhere-tech/sdk] Direct browser database API calls are disabled. ' +
+            'Use the generated somewhere:data client for operations allowed by your declared data rules, ' +
+            'or call a server function that uses sw.db.'
+        : '[@somewhere-tech/sdk] Direct browser file API calls are disabled. ' +
+            'Use a declared somewhere:files collection, or call a server function that uses sw.fs.',
     );
   }
 
