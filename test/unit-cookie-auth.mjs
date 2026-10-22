@@ -332,8 +332,8 @@ async function main() {
       logout.rec.calls.at(-1).method === 'POST' && logout.rec.calls.at(-1).url === '/api/auth/logout');
   }
 
-  /* ── rule-9 browser data warning: warns, still works, functions stay clean ─ */
-  console.log('browser data compatibility warnings');
+  /* ── browser data warning: names the refusal and the supported routes ─ */
+  console.log('browser direct-data warnings');
   {
     globalThis.document = {};
     const warnings = [];
@@ -355,16 +355,19 @@ async function main() {
     console.warn = originalWarn;
     delete globalThis.document;
 
-    check('direct browser database access warns and still returns a Result',
-      warnings.some((message) => /browser database access.*deprecated compatibility mode/i.test(message))
-        && dbResult.error === null);
-    check('direct browser files access warns once and still works',
-      warnings.filter((message) => /browser files access.*deprecated compatibility mode/i.test(message)).length === 1
-        && removeResult.error === null && removeResult.data?.length === 2);
-    check('same-origin functions.invoke is the clean migration path',
+    const dbWarning = warnings.find((message) => /legacy database endpoints are refused/.test(message));
+    const fsWarnings = warnings.filter((message) => /legacy files endpoints are refused/.test(message));
+    check('direct browser database call warns that the legacy endpoints are refused',
+      !!dbWarning && /somewhere:data/.test(dbWarning) && /declared data rules/.test(dbWarning) && /sw\.db/.test(dbWarning));
+    check('direct browser files call warns once, naming somewhere:files and sw.fs',
+      fsWarnings.length === 1 && /somewhere:files/.test(fsWarnings[0]) && /sw\.fs/.test(fsWarnings[0]));
+    check('the SDK does not block locally: the request is sent and the server answer comes back as a Result',
+      dbResult.error === null && removeResult.error === null && removeResult.data?.length === 2
+        && rec.calls.some((call) => call.url.includes('/db/query')));
+    check('same-origin functions.invoke stays warning-free',
       warnings.length === warningCountBeforeFunction && functionResult.error === null);
-    check('warnings state the non-breaking rule-9 behavior',
-      warnings.every((message) => /This call still works/.test(message)));
+    check('no warning claims working compatibility',
+      warnings.every((message) => !/still works|deprecated compatibility/i.test(message)));
   }
 
   /* ── advanced/manual mode is untouched ──────────────────────────── */

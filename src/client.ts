@@ -366,10 +366,11 @@ export class Client {
   }
 
   /**
-   * Direct browser database/files calls are a deprecated compatibility mode.
-   * Rule 9 requires warn-first plus a working migration path: never reject or
-   * alter the request here. The same call continues immediately after the
-   * one-time warning.
+   * The platform refuses direct browser-session calls to its legacy database
+   * and files endpoints (the database router answers 403
+   * BROWSER_DB_ACCESS_REMOVED). This one-time warning names the supported
+   * routes. It does not block or alter the request: the server decides, and
+   * the caller gets that answer as a normal Result.
    */
   private warnOnDirectBrowserDataAccess(path: string): void {
     if (typeof document === 'undefined') return;
@@ -381,11 +382,14 @@ export class Client {
           : null;
     if (!surface || this.browserDataWarnings.has(surface)) return;
     this.browserDataWarnings.add(surface);
-    const runtime = surface === 'database' ? 'sw.db' : 'sw.fs';
     globalThis.console?.warn?.(
-      `[@somewhere-tech/sdk] Direct browser ${surface} access is a deprecated compatibility mode. ` +
-        `This call still works. New browser apps should call a same-origin server function that uses ` +
-        `${runtime}, then invoke that function with the cookie session. See platform_help('auth-client').`,
+      surface === 'database'
+        ? '[@somewhere-tech/sdk] Direct browser calls to the legacy database endpoints are refused. ' +
+            'Use the generated somewhere:data client for operations allowed by your declared data rules, ' +
+            'or call a server function that uses sw.db.'
+        : '[@somewhere-tech/sdk] Direct browser calls to the legacy files endpoints are refused. ' +
+            'Use a declared somewhere:files collection for files your declared rules allow, ' +
+            'or call a server function that uses sw.fs.',
     );
   }
 
