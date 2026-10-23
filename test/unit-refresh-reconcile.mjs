@@ -27,18 +27,15 @@ const route = (handlers) => async (input, init = {}) => {
   return h(headers);
 };
 const meWith = (body, status = 200, extra = {}) => () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...extra } });
-// A refresh cut off `agoMs` ago (a page change or timeout mid-request): its marker records when it began.
-const orphaned = (agoMs = 120_000) => { const s = storage(); s.setItem(MARKER, String(now - agoMs) + ':0.5'); s.setItem('sw_auth_user', JSON.stringify(user)); return s; };
+const orphaned = () => { const s = storage(); s.setItem(MARKER, String(now - 120_000) + ':0.5'); s.setItem('sw_auth_user', JSON.stringify(user)); return s; };
 let passed = 0;
 const test = async (name, fn) => { calls.length = 0; await fn(); passed++; console.log('  ok   ' + name); };
 
 try {
-  await test('orphaned marker, the PRE-refresh access still answers: signed in on a non-rotating /me; used, never rotated', async () => {
-    // Cut off 5 s ago; the held access was issued before that refresh (it expires 8 s from now), so the
-    // refresh credential beside it may be the one the cut-off refresh rotated: the outcome stays unknown.
-    const s = orphaned(5_000);
+  await test('orphaned marker, access still valid: signed in on a non-rotating /me; the access is used, never rotated', async () => {
+    const s = orphaned();
     globalThis.fetch = route({
-      '/api/auth/me': meWith({ user }, 200, { 'X-Sw-Access-Expires': String(now + 8_000) }),
+      '/api/auth/me': meWith({ user }, 200, { 'X-Sw-Access-Expires': String(now + 30_000) }),
       '/data': () => Response.json({ ok: true }),
     });
     const auth = createSomewhereAuth({ mode: 'cookie', storage: s, baseUrl: 'https://app.test' });
@@ -50,24 +47,6 @@ try {
     assert.equal(calls[1].headers.get('X-No-Auto-Refresh'), '1', 'requests ride the valid access without rotating');
     assert.ok(!calls.some(c => c.path.endsWith('/refresh')), 'never /refresh while the outcome is unknown');
     assert.ok(s.getItem(MARKER), 'the marker stays: the refresh credential is still unconfirmed');
-  });
-
-  await test('orphaned marker, the access was RE-ISSUED after the refresh began (keepalive delivered its cookies): the outcome is known, normal refresh resumes', async () => {
-    // Cut off 5 s ago, but the access answering now expires 55 s from now: it was issued after that refresh
-    // began, and the runtime writes the access and refresh cookies as one pair, so the jar holds that pair.
-    const s = orphaned(5_000);
-    globalThis.fetch = route({
-      '/api/auth/me': meWith({ user }, 200, { 'X-Sw-Access-Expires': String(now + 55_000) }),
-      '/data': () => Response.json({ ok: true }),
-    });
-    const auth = createSomewhereAuth({ mode: 'cookie', storage: s, baseUrl: 'https://app.test' });
-    assert.deepEqual(await auth.getUser(), user);
-    assert.equal(auth.getState().status, 'authenticated');
-    assert.equal(calls[0].headers.get('X-No-Auto-Refresh'), '1', 'the reconciling probe itself never rotates');
-    assert.equal(s.getItem(MARKER), null, 'the unknown outcome is resolved: the marker is cleared');
-    const res = await auth.fetch('https://app.test/data');
-    assert.equal(res.status, 200);
-    assert.equal(calls[1].headers.get('X-No-Auto-Refresh'), null, 'requests go out the normal way again');
   });
 
   await test('orphaned marker, access no longer answers: the dead marker and session are cleared and a sign-in is asked for', async () => {

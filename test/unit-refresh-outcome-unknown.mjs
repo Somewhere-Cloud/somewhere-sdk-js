@@ -4,8 +4,8 @@
 //  - an interrupted, aborted or timed-out refresh stays OUTCOME-UNKNOWN (indeterminate), never a sign-out,
 //    and is never retried by the client; only a definitive 401/403 signs out;
 //  - another tab sharing the storage never starts a second rotation while that outcome is unknown;
-//  - the next page resolves the outcome WITHOUT rotating when the access answering was re-issued after the
-//    refresh began (keepalive delivered the pair), and resumes the normal refresh.
+//  - a valid access seen on the next page does NOT clear the unknown outcome: expiry compared with the
+//    wall clock cannot tell an old access from a re-issued one (review of 465e146: a 20 s clock correction).
 import assert from 'node:assert/strict';
 import { createSomewhereAuth } from '../dist/esm/auth/client.js';
 
@@ -93,25 +93,25 @@ try {
     assert.notEqual(tabB.getState().status, 'signed-out', 'and is not signed out by it');
   });
 
-  await test('the next page resolves the outcome without rotating when the pair was re-issued after the refresh began', async () => {
+  await test('a valid access on the next page never clears the unknown outcome (no expiry-vs-wall-clock inference)', async () => {
     const { auth, s } = await signedIn();
     now += 61_000;
     globalThis.fetch = route({ '/api/auth/refresh': () => { throw new DOMException('aborted', 'AbortError'); } });
     await assert.rejects(auth.fetch('https://app.test/data'));
-    assert.ok(s.getItem(MARKER));
-    now += 2_000; // the next page, after keepalive delivered the rotated pair (the access now lasts ~58 s more)
+    const marker = s.getItem(MARKER);
+    assert.ok(marker);
+    now -= 20_000; // a wall-clock correction: the OLD access now looks long-lived relative to the marker
     globalThis.fetch = route({
       '/api/auth/me': () => Response.json({ user }, { headers: { 'X-Sw-Access-Expires': String(now + 58_000) } }),
       '/data': () => Response.json({ ok: true }),
     });
     const next = createSomewhereAuth({ mode: 'cookie', storage: s, baseUrl: 'https://app.test' });
-    assert.deepEqual(await next.getUser(), user);
+    await next.getUser();
     const probe = calls.find(c => c.path === '/api/auth/me');
     assert.equal(probe.headers.get('X-No-Auto-Refresh'), '1', 'the reconciling probe cannot rotate');
-    assert.equal(next.getState().status, 'authenticated');
-    assert.equal(s.getItem(MARKER), null, 'resolved');
-    assert.equal((await next.fetch('https://app.test/data')).status, 200);
-    assert.equal(calls.at(-1).headers.get('X-No-Auto-Refresh'), null, 'normal requests again');
+    assert.equal(s.getItem(MARKER), marker, 'the possibly-committed rotation stays unknown');
+    assert.notEqual(next.getState().status, 'signed-out');
+    assert.equal(refreshes(), 1, 'and nothing rotates the possibly-rotated credential');
   });
 } finally {
   Date.now = realNow; globalThis.fetch = realFetch;

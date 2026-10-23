@@ -364,10 +364,6 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   /** A pending marker seen while holding the refresh lock belongs to no live refresh: one that was
    *  cut off (a page change or crash mid-request), so its rotation may or may not have committed. */
   function refreshOrphaned(): boolean { try { return storage.getItem(refreshPendingKey) !== null; } catch { return false; } }
-  /** When the pending (unknown-outcome) refresh began, from its marker; 0 if there is none. */
-  function pendingRefreshStartedAt(): number {
-    try { const m = storage.getItem(refreshPendingKey); const t = m ? Number(m.split(':')[0]) : 0; return Number.isFinite(t) ? t : 0; } catch { return 0; }
-  }
   function confirmRefresh(marker?: string) { try { if (marker === undefined || storage.getItem(refreshPendingKey) === marker) storage.removeItem(refreshPendingKey); } catch { /* a new sign-in still replaces local credentials */ } }
   let accessExpiresAt = session ? tokenExpiry(session.accessToken) : 0;
   let refreshUncertain = false;
@@ -614,8 +610,6 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // a sign-out while the refresh is pending. Only GET/HEAD qualify: a mutation still waits, so a
   // mutation is never sent twice. A demand refresh (token expired or about to be) still blocks.
   const CONCURRENT_READ_MIN_MS = 5_000;
-  /** See settleReconciled: an access expiring this long after an uncertain refresh began was issued after it. */
-  const REISSUED_AFTER_START_MS = 30_000;
   const authFetch: typeof fetch = (input, init = {}) => send(input, init, true);
   const sendDuringRefresh = (input: RequestInfo | URL, init: RequestInit): Promise<Response> => {
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
@@ -940,19 +934,6 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       writeUser(u);
       status = 'authenticated';
       error = null;
-      // The outcome is KNOWN when the access credential answering now was issued after the uncertain
-      // refresh began: the runtime always writes the access and refresh cookies as one pair, so the
-      // refresh credential beside it is that pair's, not the one the cut-off refresh may have rotated.
-      // A held pre-refresh access expires at most ~13 s after the refresh starts; a re-issued one
-      // lasts 60 s. The 30 s margin separates them and tolerates clock skew.
-      const startedAt = pendingRefreshStartedAt();
-      if (preferCookie && startedAt > 0 && Number.isFinite(expiry) && expiry >= startedAt + REISSUED_AFTER_START_MS) {
-        confirmRefresh();
-        refreshUncertain = false;
-        emit();
-        scheduleRefresh();
-        return u;
-      }
       emit();
       return u;
     }
