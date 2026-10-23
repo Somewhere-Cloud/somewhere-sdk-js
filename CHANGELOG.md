@@ -6,6 +6,22 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.12.6 (2026-10-23)
+
+### Fixed
+- The default auth adapter preserves `AUTH_VERIFY_UNAVAILABLE` as a fixed
+  503 response without forwarding runtime error text. The browser keeps its
+  last-known user in an indeterminate state instead of treating the outage as
+  a sign-out (tsk_57b057218ccb4e898e6fff2581313dee).
+- Limited mitigation for a refresh cut off by a page change (platform
+  tsk_8c5a0244): the session refresh request is sent with `keepalive`, so
+  navigating away no longer cancels a refresh that may already have rotated
+  the session, and its cookies can still be stored. This is not full recovery
+  from network loss: when the refresh response is lost, the outcome stays
+  unknown as before (the auth state is `indeterminate`, it is never retried,
+  and never treated as a sign-out); a definitive 401/403 still signs out. No
+  API, type or option change.
+
 ## 0.12.5 (2026-10-22)
 
 ### Fixed
