@@ -564,7 +564,10 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       beginRefresh();
       const headers: Record<string, string> = { 'X-Sw-Auth-Mode': preferCookie ? 'cookie' : 'header' };
       if (session) { headers.Authorization = 'Bearer ' + session.accessToken; headers[RIDE_ALONG_HEADER] = session.refreshToken; }
-      const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal });
+      // keepalive: a page change no longer cancels a refresh that may already be rotating, so its
+      // Set-Cookie can still land (a mitigation for lost responses, not full network-loss recovery).
+      // The mutation deadline (signal) still bounds it.
+      const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal, keepalive: true });
       if (started !== generation || signal.aborted) return;
       if (res.status === 401 || res.status === 403) {
         confirmRefresh(); writeSession(null); settle('signed-out', null); return;
