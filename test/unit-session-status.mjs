@@ -6,6 +6,7 @@
 //   npm run build && node test/unit-session-status.mjs
 
 import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
+import { somewhereAuth } from '@somewhere-tech/sdk/server';
 
 let failed = 0;
 const check = (name, cond, detail) => {
@@ -118,6 +119,35 @@ for (const [label, respond, code] of [
   const s = auth.getState();
   check(`/me ${label} → indeterminate, last-known user kept, error ${code}`,
     s.status === 'indeterminate' && s.user?.id === 'usr_a' && u?.id === 'usr_a' && s.error?.code === 'SESSION_CHECK_FAILED' && s.error.status === code, s);
+}
+// The default server adapter keeps the runtime's verification outage as a
+// fixed 503 (never 200 { user: null }); the client keeps the last-known user.
+{
+  const CANARY = 'CANARY-runtime-prose';
+  const adapter = (fromRequest) => somewhereAuth(new Request('https://app.example/api/auth/me'), { auth: { fromRequest } });
+  const outage = () => { const e = new Error(CANARY); e.code = 'AUTH_VERIFY_UNAVAILABLE'; e.status = 503; throw e; };
+  const res = await adapter(outage);
+  const body = await res.clone().json();
+  check('adapter: AUTH_VERIFY_UNAVAILABLE → 503 with the fixed code and message',
+    res.status === 503 && body.error === 'AUTH_VERIFY_UNAVAILABLE' && body.message === 'Identity verification is temporarily unavailable. Please retry.'
+      && !JSON.stringify(body).includes('CANARY') && !('user' in body) && res.headers.get('set-cookie') === null, body);
+  const other = await adapter(() => { const e = new Error(CANARY); e.code = 'SOMETHING_ELSE'; e.status = 503; throw e; });
+  check('adapter: other codes are not passed through', (await other.json()).error === 'AUTH_ERROR');
+  const none = await adapter(async () => null);
+  check('adapter: no session stays 200 { user: null }', none.status === 200 && (await none.json()).user === null);
+
+  browser({ cachedUser: A });
+  server({ '/api/auth/me': () => adapter(outage) });
+  const auth = createSomewhereAuth();
+  const u = await auth.getUser();
+  const s = auth.getState();
+  check('adapter 503 → client indeterminate, last-known user kept',
+    s.status === 'indeterminate' && s.user?.id === 'usr_a' && u?.id === 'usr_a' && auth.getCachedUser()?.id === 'usr_a' && s.error?.status === 503, s);
+
+  browser({ cachedUser: A });
+  server({ '/api/auth/me': () => adapter(async () => null) });
+  const definitive = createSomewhereAuth();
+  check('adapter 200 { user: null } → client signed-out (definitive)', (await definitive.getUser()) === null && definitive.getState().status === 'signed-out');
 }
 {
   browser();

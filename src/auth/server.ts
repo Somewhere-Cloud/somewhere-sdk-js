@@ -446,6 +446,12 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     if (err && typeof err === 'object' && 'code' in err && err.code === 'MFA_REQUIRED' && 'mfa_token' in err && typeof err.mfa_token === 'string' && err.mfa_token) {
       return json({ mfa_required: true, mfa_token: err.mfa_token });
     }
+    // The runtime could not adjudicate the session (outage, timeout, malformed
+    // answer). Keep that classification, with a fixed message, so a client
+    // reads it as "unknown", never as signed out.
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'AUTH_VERIFY_UNAVAILABLE') {
+      return json({ error: 'AUTH_VERIFY_UNAVAILABLE', message: 'Identity verification is temporarily unavailable. Please retry.' }, 503);
+    }
     const status = (err as { status?: number })?.status ?? 400;
     return json({ error: 'AUTH_ERROR', message: (err as Error)?.message || 'Auth failed' }, status);
   }
