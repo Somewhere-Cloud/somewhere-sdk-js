@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 /**
  * Exhaustive public-client ↔ server-adapter contract.
  *
@@ -201,7 +202,9 @@ const executionOrder = contract
 for (const entry of executionOrder) {
   const routeBefore = routeCalls.length;
   const runtimeBefore = runtimeCalls.length;
-  await invoke[entry.client]();
+  if (['billing.has', 'billing.entitlements'].includes(entry.client)) {
+    assert.throws(invoke[entry.client], error => error.code === 'BILLING_EXPLICIT_CHECK_REQUIRED');
+  } else await invoke[entry.client]();
 
   if (entry.route) {
     check(`${entry.client} reaches ${entry.route}`,

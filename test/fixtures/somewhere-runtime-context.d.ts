@@ -326,14 +326,11 @@ interface SomewhereAuthProfileUser extends SomewhereAuthUser {
   email_verified: boolean;
   banned: boolean;
   metadata: unknown;
-  plan: string;
-  plan_status: string | null;
   type: string;
   created_at: number;
   last_login_at: number | null;
   locale?: string | null;
   timezone?: string | null;
-  entitlements: string[];
   agent?: SomewhereJsonObject;
 }
 interface SomewhereAuthIssuedSession {
