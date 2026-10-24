@@ -82,15 +82,6 @@ export interface User {
    *  roll forward. Use it for UI rendering only; enforce admin access
    *  server-side with sw.auth.requireUser(req, { role: 'admin' }). */
   role?: AppUserRole;
-  /** The user's current plan slug (sw.billing) — e.g. 'free' | 'pro'. Use it to
-   *  highlight the current plan in <PricingTable>. */
-  plan?: string;
-  /** Subscription status: 'active' | 'trialing' | 'canceled' | 'past_due' | null. */
-  plan_status?: string | null;
-  /** The feature slugs this user's plan grants (sw.billing). Hydrated from the
-   *  session by the backend — `auth.billing.has(feature)` reads it with no
-   *  network call. Absent on a backend that predates entitlements. */
-  entitlements?: string[];
   [key: string]: unknown;
 }
 
@@ -109,18 +100,12 @@ export interface BillingPlan {
   features: Array<{ feature: string; limit_value: number | null }>;
 }
 
-/**
- * Entitlements client (sw.billing). `has`/`entitlements` are SYNCHRONOUS local
- * checks against the current user's session — the feature list rides the user
- * object the backend already returns, so gating costs no network round-trip
- * (the Clerk-`has()` shape). `plans()` fetches the project's catalog for a
- * pricing page.
- */
+/** Explicit catalog and checkout operations. Paid access is checked server-side. */
 export interface BillingClient {
-  /** Does the current user's plan grant `feature`? Sync; false when signed out. */
-  has(feature: string): boolean;
-  /** The current user's granted feature slugs. Sync; [] when signed out. */
-  entitlements(): string[];
+  /** @deprecated Identity has no paid assertions. Use a server endpoint calling await sw.billing.has(feature). */
+  has(feature: string): never;
+  /** @deprecated Identity has no paid assertions. Use a server endpoint calling await sw.billing.entitlements(). */
+  entitlements(): never;
   /** The project's plan catalog (network). */
   plans(): Promise<BillingPlan[]>;
   /** Start a subscription checkout for the CURRENT user and (by default) redirect
@@ -1111,10 +1096,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       return () => void listeners.delete(listener);
     },
     billing: {
-      // Reads the live `user` closure binding, so it always reflects the
-      // latest session (login/logout/rotation all reassign `user`).
-      has: (feature) => Array.isArray(user?.entitlements) && user.entitlements.includes(feature),
-      entitlements: () => (Array.isArray(user?.entitlements) ? (user.entitlements as string[]) : []),
+      has: (_feature) => { throw new AuthError('Paid access is no longer part of sign-in identity. Check it in a server endpoint with await sw.billing.has(feature).', 0, 'BILLING_EXPLICIT_CHECK_REQUIRED'); },
+      entitlements: () => { throw new AuthError('Paid access is no longer part of sign-in identity. Read it in a server endpoint with await sw.billing.entitlements().', 0, 'BILLING_EXPLICIT_CHECK_REQUIRED'); },
       plans: async () => {
         const res = await authFetch(url('/plans'), { method: 'GET' });
         if (!res.ok) {

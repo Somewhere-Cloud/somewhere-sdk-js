@@ -197,11 +197,12 @@ function formatPlanPrice(p: BillingPlan): string {
  */
 export function PricingTable(props: {
   className?: string;
+  /** Current plan from an explicit server billing observation. */
+  currentPlan?: string | null;
   onSubscribe?: (planSlug: string) => void;
   onError?: (message: string) => void;
 }) {
   const auth = useAuth();
-  const user = useUser();
   const [plans, setPlans] = useState<BillingPlan[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -231,7 +232,7 @@ export function PricingTable(props: {
   return (
     <div className={`sw-pricing-table${props.className ? ' ' + props.className : ''}`}>
       {plans.map((p) => {
-        const current = !!user?.plan && user.plan === p.slug;
+        const current = typeof props.currentPlan === 'string' && props.currentPlan === p.slug;
         return (
           <div key={p.slug} className="sw-plan" data-plan={p.slug} data-current={current || undefined}>
             <div className="sw-plan-name">{p.name}</div>
