@@ -127,45 +127,55 @@ export function Protect({ children, fallback = null, pending = null }: { childre
   return state.signingOut ? <>{pending}</> : <>{fallback}</>;
 }
 
-function userEntitlements(user: User | null): string[] {
-  return Array.isArray(user?.entitlements) ? (user.entitlements as string[]) : [];
+/** An explicit server billing observation, separate from sign-in identity. */
+export type BillingObservation =
+  | { status: 'ready'; features: readonly string[] }
+  | { status: 'loading' }
+  | { status: 'unavailable' };
+
+function explicitBilling(observation?: BillingObservation): BillingObservation {
+  if (!observation) throw new AuthError('Read billing in a server endpoint with await sw.billing.entitlements(), then pass an explicit billing observation.', 0, 'BILLING_EXPLICIT_CHECK_REQUIRED');
+  return observation;
+}
+
+/** Local presentation check against an explicit observation; server authorization remains required. */
+export function useEntitlements(observation?: BillingObservation):
+  | { status: 'ready'; has: (feature: string) => boolean; entitlements: readonly string[] }
+  | { status: 'loading' }
+  | { status: 'unavailable' } {
+  const billing = explicitBilling(observation);
+  if (billing.status !== 'ready') return billing;
+  const entitlements = [...billing.features];
+  return { status: 'ready', has: (feature: string) => entitlements.includes(feature), entitlements };
 }
 
 /**
- * Entitlements for the current user (sw.billing). `has(feature)` is a sync
- * local check against the session — no network. `entitlements` is the granted
- * feature slugs. Re-renders on login/logout/plan change (the feature list
- * rides the user object, refreshed on every /me).
- */
-export function useEntitlements(): { has: (feature: string) => boolean; entitlements: string[]; loading: boolean } {
-  const { user, loading } = useAuthContext();
-  const entitlements = userEntitlements(user);
-  return {
-    has: (feature: string) => entitlements.includes(feature),
-    entitlements,
-    loading,
-  };
-}
-
-/**
- * Gate a subtree behind a billing FEATURE (sw.billing) — the entitlement
- * mirror of <Protect>. Shows `fallback` (default null) when the current user's
- * plan doesn't grant `feature` (or they're signed out).
+ * Present a billing feature using an explicit observation from your server.
+ * Loading and unavailable observations have separate presentation from a ready denial.
+ * Server endpoints must still authorize the operation.
  *
- *   <Gate feature="export" fallback={<Upsell/>}><ExportButton/></Gate>
+ *   <Gate billing={billing} feature="export" pending={<Spinner/>}
+ *     unavailable={<Retry/>} fallback={<Upsell/>}><ExportButton/></Gate>
  */
 export function Gate({
+  billing,
   feature,
   children,
   fallback = null,
+  pending = null,
+  unavailable = null,
 }: {
+  billing?: BillingObservation;
   feature: string;
   children: React.ReactNode;
   fallback?: React.ReactNode;
+  pending?: React.ReactNode;
+  unavailable?: React.ReactNode;
 }) {
-  const { user, loading } = useAuthContext();
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background
-  return userEntitlements(user).includes(feature) ? <>{children}</> : <>{fallback}</>;
+  const observation = explicitBilling(billing);
+  if (observation.status === 'loading') return <>{pending}</>;
+  if (observation.status === 'unavailable') return <>{unavailable}</>;
+  return observation.features.includes(feature) ? <>{children}</> : <>{fallback}</>;
 }
 
 function formatPlanPrice(p: BillingPlan): string {
