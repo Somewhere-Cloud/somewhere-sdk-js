@@ -93,15 +93,33 @@ export class FunctionsClient {
 
     const parsed = await readBody(res);
     if (!res.ok) {
-      const b = parsed as { error?: string; message?: string } | null;
+      const b = parsed as {
+        error?: string;
+        message?: string;
+        retry?: unknown;
+        retryable?: unknown;
+        outcome?: unknown;
+        write_committed?: unknown;
+        prior_write_committed?: unknown;
+        retry_after_ms?: unknown;
+      } | null;
+      // An unknown or committed write must not be repeated just because the
+      // response is 5xx. Keep explicit refusals ahead of any retry:true hint.
+      const unsafeToRetry = b?.retry === false || b?.retryable === false
+        || b?.outcome === 'unknown' || b?.outcome === 'committed'
+        || b?.write_committed === true || b?.prior_write_committed === true;
+      const retry = unsafeToRetry ? false
+        : typeof b?.retry === 'boolean' ? b.retry : res.status >= 500;
+      const retryAfterMs = b?.retry_after_ms;
       return {
         data: null,
         error: new SomewhereError({
           code: b?.error ?? `FUNCTION_HTTP_${res.status}`,
           message: b?.message ?? `Function '${fn}' returned ${res.status}.`,
           statusCode: res.status,
-          retry: res.status >= 500,
-          retryAfterMs: null,
+          retry,
+          retryAfterMs: typeof retryAfterMs === 'number' && Number.isSafeInteger(retryAfterMs) && retryAfterMs >= 0
+            ? retryAfterMs : null,
           body: parsed,
         }),
         status: res.status,
