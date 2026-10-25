@@ -415,7 +415,15 @@ export class Client {
       // or a CF-level block). Turn it into a typed error rather than
       // letting the raw JSON.parse fault bubble up.
       if (res.ok) {
-        return null;
+        throw new SomewhereError({
+          code: 'INVALID_RESPONSE',
+          message:
+            `The platform returned a non-JSON response (HTTP ${res.status}), so the operation's result could not be confirmed. ` +
+            'Inspect the resulting state before repeating a write.',
+          statusCode: res.status,
+          retry: false,
+          retryAfterMs: null,
+        });
       }
       throw new SomewhereError({
         code: 'INVALID_RESPONSE',
