@@ -2,7 +2,7 @@ import { SomewhereError } from './errors.js';
 import { QueryCache } from './query-cache.js';
 import type { FetchLike, Result, SomewhereOptions } from './types.js';
 
-const DEFAULT_BASE_URL = 'https://api.somewhere.tech/v1';
+const DEFAULT_BASE_URL = 'https://api.somewhere.cloud/v1';
 
 /**
  * Which auth header a request should use.

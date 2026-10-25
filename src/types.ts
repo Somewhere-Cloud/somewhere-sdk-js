@@ -18,7 +18,7 @@ export interface SomewhereOptions {
   token?: string;
   /** Default `project_id` used by every query/storage/auth/emails/chat call. */
   projectId?: string;
-  /** Override the REST base URL. Defaults to `https://api.somewhere.tech/v1`. */
+  /** Override the REST base URL. Defaults to `https://api.somewhere.cloud/v1`. */
   baseUrl?: string;
   /**
    * The project's own URL (e.g. `https://my-app.somewhere.site`), used as the
@@ -65,7 +65,7 @@ export interface CreateClientOptions {
    * (e.g. `https://myapp.com`) — we can't infer the project from it.
    */
   projectId?: string;
-  /** Override the platform REST base. Defaults to `https://api.somewhere.tech/v1`. */
+  /** Override the platform REST base. Defaults to `https://api.somewhere.cloud/v1`. */
   apiUrl?: string;
   /** Override the functions host. Defaults to the URL passed as the first argument. */
   functionsUrl?: string;
