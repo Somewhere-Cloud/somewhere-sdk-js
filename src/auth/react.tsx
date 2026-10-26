@@ -100,7 +100,8 @@ export function useAuth(): SomewhereAuth {
 }
 
 export function SignedIn({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuthContext();
+  const { user, loading, state } = useAuthContext();
+  if (state.signingOut) return null;
   if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
   return user ? <>{children}</> : null;
 }
@@ -113,18 +114,20 @@ export function SignedIn({ children }: { children: React.ReactNode }) {
  */
 export function SignedOut({ children, pending = null }: { children: React.ReactNode; pending?: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
+  if (state.signingOut) return <>{pending}</>;
   if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
   if (user) return null;
-  return state.signingOut ? <>{pending}</> : <>{children}</>;
+  return <>{children}</>;
 }
 
 /** Gate a subtree behind auth; shows `fallback` (default null) when signed
  *  out, and `pending` (default null) while a signOut() awaits the server. */
 export function Protect({ children, fallback = null, pending = null }: { children: React.ReactNode; fallback?: React.ReactNode; pending?: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
+  if (state.signingOut) return <>{pending}</>;
   if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
   if (user) return <>{children}</>;
-  return state.signingOut ? <>{pending}</> : <>{fallback}</>;
+  return <>{fallback}</>;
 }
 
 /** An explicit server billing observation, separate from sign-in identity. */
