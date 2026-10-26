@@ -245,7 +245,7 @@ for (const [label, respond, code] of [
   const signOut = auth.signOut();
   await tick();
   check('signOut waits for the earlier queued login before calling /logout', calls.map((c) => c.path).join() === '/api/auth/login');
-  check('signOut clears local state immediately', auth.getState().status === 'signed-out');
+  check('signOut invalidates the earlier login while reporting pending', auth.getState().status === 'checking' && auth.getState().user === null && auth.getState().signingOut);
   login.resolve(json(200, { user: B, cookie_session: true }));
   const result = await signIn;
   await signOut;
@@ -576,24 +576,28 @@ for (const [label, respond, expect] of [
 
 // ------------------------------------- sign-out pending until the server answers
 
-{ // Delayed /logout: identity cleared at once, pending until the answer.
+{ // Delayed /logout: keep last-known identity until the answer; credentials drop immediately.
   browser({ cachedUser: A });
   const logout = deferred();
-  server({ '/api/auth/logout': () => logout.promise });
+  const calls = server({ '/api/auth/logout': () => logout.promise });
   const auth = createSomewhereAuth();
   const seen = [];
   auth.onChange((s) => seen.push(`${s.status}:${s.signingOut}`));
   const done = auth.signOut();
   let s = auth.getState();
-  check('signOut(): user cleared immediately, signingOut true while /logout is pending',
-    s.user === null && s.status === 'signed-out' && s.signingOut === true && s.signOutUnconfirmed === false, s);
+  check('signOut(): last-known user retained and unverified while /logout is pending',
+    s.user?.id === A.id && s.session === null && s.status === 'checking' && s.signingOut === true && s.signOutUnconfirmed === false, s);
   await tick(); await tick();
   check('…still pending before the server answers', auth.getState().signingOut === true);
+  const logoutCall = calls.find((call) => call.path === '/api/auth/logout');
+  check('…logout survives navigation while retaining its deadline and cookies',
+    logoutCall?.init.keepalive === true && logoutCall.init.signal instanceof AbortSignal
+      && logoutCall.init.credentials === 'include');
   logout.resolve(json(200, { ok: true }));
   await done;
   s = auth.getState();
-  check('…signingOut false once /logout is answered (confirmed, no error)', s.signingOut === false && s.signOutUnconfirmed === false && s.error === null, s);
-  check('…onChange reported pending, then confirmed', seen.includes('signed-out:true') && seen.at(-1) === 'signed-out:false', seen);
+  check('…signingOut false once /logout is answered (confirmed, no error)', s.user === null && s.status === 'signed-out' && s.signingOut === false && s.signOutUnconfirmed === false && s.error === null, s);
+  check('…onChange reported pending, then confirmed', seen.includes('checking:true') && seen.at(-1) === 'signed-out:false', seen);
 }
 for (const [label, respond, opts] of [
   ['500', () => json(500, {}), {}],

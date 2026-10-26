@@ -61,7 +61,8 @@
     "build:types": "tsc -p tsconfig.types.json",
     "clean": "rm -rf dist",
     "test": "npm run build && tsc -p tsconfig.test.json && node test/unit-supabase-shape.mjs && node test/unit-query-builder.mjs && node test/unit-cookie-auth.mjs && node test/unit-cookie-default.mjs && node test/unit-auth-adapter-contract.mjs && node test/unit-mfa-continuation.mjs && node test/unit-signin-hardening.mjs && node test/unit-portable-refresh.mjs && node test/unit-refresh-reconcile.mjs && node test/unit-refresh-outcome-unknown.mjs && node test/unit-valid-token-during-refresh.mjs && node test/unit-session-status.mjs && node test/unit-signout-body.mjs && node test/unit-header-logout.mjs && node test/unit-cookie-logout.mjs && node test/unit-email-verification.mjs && node test/unit-oauth-start.mjs && node test/unit-cache.mjs && node test/unit-cache.mjs --built && node test/unit-function-retry.mjs && node test/unit-invalid-response.mjs && node test/unit-explicit-billing.mjs && node test/unit-react-explicit-billing.mjs && node test/unit-db-query.mjs && node test/unit-projects.mjs && node test/unit-project-update.mjs && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build",
+    "test:browser-signout": "node test/browser-signout-reload.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -75,9 +76,13 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "@types/react": "^19.2.16",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "playwright": "1.58.2",
     "react": "^19.2.0",
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0"
+    "react-dom": "19.2.8",
+    "typescript": "^5.4.0"
   }
 }

@@ -58,9 +58,10 @@ import { isAuthUser, mfaChallenge } from './continuation.js';
  *     check reports it. A timed-out call (mutationTimeoutMs covers the
  *     request, its body and any follow-up /me) is abandoned locally and writes
  *     nothing afterwards, but the server may still have acted on it.
- *   - signOut() clears local state at once; the server sign-out is confirmed
- *     only by a successful /logout. Until then `signOutUnconfirmed` is true and
- *     the next signOut() retries it.
+ *   - signOut() drops local credentials at once and retains the last-known user
+ *     while `signingOut` is true. Only a successful /logout confirms server
+ *     sign-out; a failure clears the local user but leaves `signOutUnconfirmed`
+ *     true so the next signOut() retries it.
  *
  * The token trio originates from the app's own backend (login/signup are
  * developer-key-gated on the platform, so they can't be called from the
@@ -119,12 +120,13 @@ export interface BillingClient {
 
 /**
  * What this client last learned from the backend about the session.
- *   checking       no answer yet since the client was created; `user` is cached, unverified
+ *   checking       no answer yet since the client was created, or sign-out is pending;
+ *                  `user` is cached, unverified
  *   authenticated  the backend confirmed `user` (a sign-in response, or /me with a user)
  *   signed-out     no identity in this client: the backend confirmed no session
  *                  (/me 401 or { user: null }, a 401 on the current identity), or
- *                  signOut() cleared it. While `signingOut` is true the server
- *                  has not answered /logout yet; `signOutUnconfirmed` means it failed.
+ *                  signOut() finished locally. `signOutUnconfirmed` means the
+ *                  server did not confirm that sign-out.
  *   indeterminate  the last check failed (network error, non-401 error status,
  *                  unreadable body); `user` is the last-known identity, unverified
  */
@@ -142,8 +144,8 @@ export interface AuthState {
    *  answers definitively, or a sign-in replaces the session. */
   signOutUnconfirmed: boolean;
   /** True from a signOut() call until its /logout is answered (or fails or
-   *  times out). `user` is already null, but the server session may still be
-   *  active: show a pending state, not a signed-out one, until this is false. */
+   *  times out). The last-known `user` remains while pending so user-null UI
+   *  cannot imply completion. Show a pending state and disable private actions. */
   signingOut: boolean;
 }
 
@@ -1023,16 +1025,18 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // known or pending cookie identity, or a sign-in queued ahead of this call.
       const serverWork = owedSignOut !== null || !!had
         || (preferCookie && (!!user || status !== 'signed-out' || pendingMutations > 0));
-      // Local state is cleared NOW; earlier checks, 401s, rotations and
-      // queued sign-ins can no longer restore an identity. Clearing it locally
-      // is not a server sign-out: that is only confirmed by /logout below.
+      // Invalidate earlier checks/rotations and drop credentials immediately.
+      // Retain the last-known user until settlement: a user-null UI can trigger
+      // navigation before this queued request has even started.
       const mine = ++generation;
       writeSession(null);
       // Pending until /logout is answered: consumers show "signing out", not
       // "signed out", while the server may still accept the session.
-      if (serverWork) signOutsInFlight++;
-      settle('signed-out', null);
-      if (!serverWork) return Promise.resolve();
+      if (!serverWork) { settle('signed-out', null); return Promise.resolve(); }
+      signOutsInFlight++;
+      status = 'checking';
+      scheduleRefresh();
+      emit();
       const unconfirmed = (failure: AuthError) => {
         // Owed only for this call's generation: a newer sign-in replaced the
         // session, and a newer signOut() retries it itself.
@@ -1050,6 +1054,10 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         try {
           res = await fetch(url('/logout'), {
             method: 'POST',
+            // Keep an already-started revoke and cookie-clearing response alive
+            // if the consumer navigates before awaiting signOut().
+            // Network failures and the mutation deadline still remain unconfirmed.
+            keepalive: true,
             // A header session is revoked by its refresh token, sent as the same
             // ride-along header authFetch uses; the access bearer alone revokes
             // nothing. `had` is captured at call time, so a retry resends the
@@ -1083,7 +1091,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         unconfirmed(new AuthError('Sign-out timed out; the session may still be active.', 0, 'SIGN_OUT_UNCONFIRMED'));
       }).finally(() => {
         signOutsInFlight--;
-        emit();
+        if (generation === mine) settle('signed-out', null);
+        else emit();
       });
     },
     getUser,
