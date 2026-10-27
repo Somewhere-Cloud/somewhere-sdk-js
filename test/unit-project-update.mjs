@@ -5,7 +5,7 @@ const fetch=async(url,init)=>{calls.push({url,init});return new Response(JSON.st
 const sw=new Somewhere({key:'smt_test',projectId:'my-app',fetch});
 const settings={analytics_consent:{mode:'required',policy_version:'v1'}};
 const result=await sw.projects.update(settings);
-assert.equal(calls[0].url,'https://api.somewhere.tech/v1/projects/my-app');assert.equal(calls[0].init.method,'PATCH');assert.equal(calls[0].init.headers.Authorization,'Bearer smt_test');assert.deepEqual(JSON.parse(calls[0].init.body),settings);assert.deepEqual(result.data,reply.body.data);assert.equal(result.error,null);
+assert.equal(calls[0].url,'https://api.somewhere.cloud/v1/projects/my-app');assert.equal(calls[0].init.method,'PATCH');assert.equal(calls[0].init.headers.Authorization,'Bearer smt_test');assert.deepEqual(JSON.parse(calls[0].init.body),settings);assert.deepEqual(result.data,reply.body.data);assert.equal(result.error,null);
 await sw.projects.update({analytics_consent:{mode:'off',policy_version:'v2'}},'other/ space-é');assert(calls[1].url.endsWith('/projects/other%2F%20space-%C3%A9'));assert.equal(JSON.parse(calls[1].init.body).analytics_consent.mode,'off');
 for(const code of ['VALIDATION_ERROR','FORBIDDEN']){reply={status:code==='FORBIDDEN'?403:400,body:{ok:false,error:code,message:'Policy refused'}};const res=await sw.projects.update(settings);assert(res.error instanceof SomewhereError);assert.equal(res.error.code,code);assert.equal(res.status,reply.status);assert.equal(res.data,null);}
 for(const pid of [undefined,'']){const before=calls.length;const missing=new Somewhere({key:'smt_test',fetch});await assert.rejects(missing.projects.update(settings,pid),/requires a projectId/);assert.equal(calls.length,before);}
