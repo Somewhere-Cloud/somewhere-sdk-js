@@ -9,8 +9,8 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { createSomewhereAuth } from '@somewhere-cloud/sdk/auth';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
 
 const user = { id: 'u1', email: 'person@example.com' };
 const platformError = (code, status) => Object.assign(new Error(`platform ${code}`), { code, status });

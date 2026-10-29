@@ -10,6 +10,7 @@ for (const [format, sdk] of [['ESM', esm], ['CommonJS', cjs]]) {
     const calls = [];
     const sw = new sdk.Somewhere({
       key: 'smt_synthetic_fixture', projectId: 'synthetic-project', cache: false,
+      functionsUrl: 'https://synthetic-project.example.invalid',
       fetch: async (url, init) => {
         calls.push({ url, method: init.method });
         if (networkError) throw networkError;

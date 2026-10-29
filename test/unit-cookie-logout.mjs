@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
 
 const err = (code, status, extra = {}) => Object.assign(new Error(`platform ${code}`), { code, status, ...extra });
 const logoutRequest = (headers = {}) => new Request('https://app.somewhere.site/api/auth/logout', {

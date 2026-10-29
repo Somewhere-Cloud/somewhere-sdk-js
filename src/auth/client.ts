@@ -1,7 +1,7 @@
 import { isAuthUser, mfaChallenge } from './continuation.js';
 
 /**
- * @somewhere-tech/sdk/auth — framework-agnostic session client.
+ * @somewhere-cloud/sdk/auth — framework-agnostic session client.
  *
  * ONLY-PATH CONTRACT (tsk_acd56ee8): a browser uses same-origin httpOnly
  * cookie sessions and holds zero credentials. This package is an optional UI
@@ -65,7 +65,7 @@ import { isAuthUser, mfaChallenge } from './continuation.js';
  *
  * The token trio originates from the app's own backend (login/signup are
  * developer-key-gated on the platform, so they can't be called from the
- * browser). Mount `somewhereAuth` from `@somewhere-tech/sdk/server` at
+ * browser). Mount `somewhereAuth` from `@somewhere-cloud/sdk/server` at
  * `/api/auth/*` to expose the standard endpoints this client talks to.
  */
 
@@ -781,7 +781,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         throw new AuthError(
           `Sign-in reached ${url(path)} but the server did not confirm a cookie session, so nothing was stored. ` +
             `The handler there does not support cookie mode: mount the SDK's handler ` +
-            `(export { somewhereAuth as default } from '@somewhere-tech/sdk/server'), or make yours set the ` +
+            `(export { somewhereAuth as default } from '@somewhere-cloud/sdk/server'), or make yours set the ` +
             `session cookies and reply { user, cookie_session: true } when the request has X-Sw-Auth-Mode: cookie.`,
           res.status,
           'COOKIE_SESSION_NOT_CONFIRMED',

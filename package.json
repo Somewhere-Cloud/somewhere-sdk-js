@@ -1,10 +1,10 @@
 {
-  "name": "@somewhere-tech/sdk",
-  "version": "0.12.10",
-  "description": "Official JavaScript/TypeScript SDK for the somewhere.tech platform API.",
+  "name": "@somewhere-cloud/sdk",
+  "version": "0.13.0",
+  "description": "Official JavaScript/TypeScript SDK for the somewhere.cloud platform API.",
   "keywords": [
     "somewhere",
-    "somewhere.tech",
+    "somewhere.cloud",
     "backend",
     "sdk",
     "database",
@@ -13,15 +13,15 @@
     "ai",
     "functions"
   ],
-  "homepage": "https://somewhere.tech",
+  "homepage": "https://somewhere.cloud",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Somewhere-Tech/somewhere-sdk-js.git"
+    "url": "git+https://github.com/Somewhere-Cloud/somewhere-sdk-js.git"
   },
   "license": "MIT",
   "author": {
-    "name": "somewhere.tech",
-    "email": "support@somewhere.tech"
+    "name": "somewhere.cloud",
+    "email": "support@somewhere.cloud"
   },
   "type": "module",
   "main": "./dist/cjs/index.cjs",
@@ -60,7 +60,7 @@
     "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node -e \"require('fs').renameSync('dist/cjs/index.js','dist/cjs/index.cjs')\"",
     "build:types": "tsc -p tsconfig.types.json",
     "clean": "rm -rf dist",
-    "test": "npm run build && tsc -p tsconfig.test.json && node test/unit-supabase-shape.mjs && node test/unit-query-builder.mjs && node test/unit-cookie-auth.mjs && node test/unit-cookie-default.mjs && node test/unit-auth-adapter-contract.mjs && node test/unit-mfa-continuation.mjs && node test/unit-signin-hardening.mjs && node test/unit-portable-refresh.mjs && node test/unit-refresh-reconcile.mjs && node test/unit-refresh-outcome-unknown.mjs && node test/unit-valid-token-during-refresh.mjs && node test/unit-session-status.mjs && node test/unit-signout-body.mjs && node test/unit-header-logout.mjs && node test/unit-cookie-logout.mjs && node test/unit-email-verification.mjs && node test/unit-oauth-start.mjs && node test/unit-cache.mjs && node test/unit-cache.mjs --built && node test/unit-function-retry.mjs && node test/unit-invalid-response.mjs && node test/unit-explicit-billing.mjs && node test/unit-react-explicit-billing.mjs && node test/unit-db-query.mjs && node test/unit-projects.mjs && node test/unit-project-update.mjs && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
+    "test": "npm run build && tsc -p tsconfig.test.json && node test/unit-supabase-shape.mjs && node test/unit-query-builder.mjs && node test/unit-cookie-auth.mjs && node test/unit-cookie-default.mjs && node test/unit-auth-adapter-contract.mjs && node test/unit-mfa-continuation.mjs && node test/unit-signin-hardening.mjs && node test/unit-portable-refresh.mjs && node test/unit-refresh-reconcile.mjs && node test/unit-refresh-outcome-unknown.mjs && node test/unit-valid-token-during-refresh.mjs && node test/unit-session-status.mjs && node test/unit-signout-body.mjs && node test/unit-header-logout.mjs && node test/unit-cookie-logout.mjs && node test/unit-email-verification.mjs && node test/unit-oauth-start.mjs && node test/unit-cache.mjs && node test/unit-cache.mjs --built && node test/unit-function-retry.mjs && node test/unit-invalid-response.mjs && node test/unit-cloud-default.mjs && node test/unit-function-host.mjs && node test/unit-explicit-billing.mjs && node test/unit-react-explicit-billing.mjs && node test/unit-db-query.mjs && node test/unit-projects.mjs && node test/unit-project-update.mjs && node --input-type=module -e \"import('./dist/esm/index.js').then(async (m) => { globalThis.__sw = m; await import('./test/run-basic.mjs'); })\"",
     "prepublishOnly": "npm run clean && npm run build",
     "test:browser-signout": "node test/browser-signout-reload.mjs"
   },

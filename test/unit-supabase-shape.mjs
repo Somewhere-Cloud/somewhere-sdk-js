@@ -97,11 +97,11 @@ async function main() {
     check('returns {data,error}', res.error === null && res.data.plan === 'pro');
   }
   {
-    // derive host from a slug projectId when no URL was given
+    // a slug projectId is not a host: refused before any request
     const rec = recorder(() => ({ json: { ok: true } }));
     const sw = new Somewhere({ key: 'smt_x', projectId: 'myapp', fetch: rec.fetchImpl });
-    await sw.functions.invoke('hello');
-    await eq('derives https://{slug}.somewhere.tech', rec.calls.at(-1).url, 'https://myapp.somewhere.tech/api/hello');
+    const res = await sw.functions.invoke('hello');
+    check('slug projectId → NO_FUNCTION_HOST, no request', res.error?.code === 'NO_FUNCTION_HOST' && rec.calls.length === 0);
   }
   {
     // a UUID projectId can't become a host → loud NO_FUNCTION_HOST

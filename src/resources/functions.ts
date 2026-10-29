@@ -14,15 +14,14 @@ import type { FunctionInvokeOptions, Result } from '../types.js';
  * JSON response (or text); `error` is set on any non-2xx status or network
  * failure, using the established `{ data, error }` envelope.
  *
- * The function host is the URL you passed to `createClient(url, key)`. When
- * the client was built with `new Somewhere({ key, projectId })` instead, the
- * host is derived as `https://{projectId}.somewhere.tech` when `projectId`
- * is a slug. A UUID `projectId` (or a custom domain you didn't pass) can't
- * be turned into a host — `invoke` then returns a loud `NO_FUNCTION_HOST`
- * error telling you to use `createClient(url, …)` or pass `functionsUrl`.
+ * The function host is the app URL you passed to `createClient(appUrl, key)`
+ * or as `functionsUrl`. It is never derived from `projectId`: a project id
+ * can be a slug that is unique only to its owner, and the same text can be
+ * another customer's subdomain, so a derived host could receive your
+ * credentials. Without an app URL `invoke` returns `NO_FUNCTION_HOST` before
+ * any request. In a project folder the CLI records the platform-reported URL
+ * as `app_url` in `.somewhere.json`, and `somewhere status --json` prints it.
  */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/i;
 
 export class FunctionsClient {
   constructor(private readonly client: Client) {}
@@ -35,9 +34,9 @@ export class FunctionsClient {
     if (!base) {
       return errored(
         'NO_FUNCTION_HOST',
-        "functions.invoke needs the project's URL. Build the client with " +
-          "createClient('https://<project>.somewhere.tech', key), or pass " +
-          '{ functionsUrl } / a slug projectId.',
+        "functions.invoke needs your app's URL, and a project id is not one. " +
+          'Build the client with createClient(appUrl, key) or pass { functionsUrl }. ' +
+          'In a project folder, app_url in .somewhere.json (or `somewhere status --json`) is the platform-reported URL.',
         400,
       );
     }
@@ -128,14 +127,9 @@ export class FunctionsClient {
     return { data: parsed as T, error: null, status: res.status };
   }
 
-  /** Resolve the function host, or null if it can't be determined. */
+  /** The caller-supplied app URL, or null. Never derived from projectId. */
   private resolveBase(): string | null {
-    if (this.client.functionsUrl) return this.client.functionsUrl;
-    const pid = this.client.resolveProjectId();
-    if (pid && SLUG_RE.test(pid) && !UUID_RE.test(pid)) {
-      return `https://${pid}.somewhere.tech`;
-    }
-    return null;
+    return this.client.functionsUrl ?? null;
   }
 }
 

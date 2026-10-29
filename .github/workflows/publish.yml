@@ -1,14 +1,13 @@
 # Publish only an exact protected-master source with npm provenance.
-# Tag releases must name the package version; manual runs must select master.
+# Scoped bootstrap is manual only and must select master.
 # This guard controls the existing workflow, not writers replacing that workflow
 # on an unprotected ref. An external publication boundary remains root-owned.
-# npm authentication still requires configured trusted publishing or NPM_TOKEN;
-# this workflow does not configure either or establish credential availability.
+# npm authentication: trusted publisher for @somewhere-cloud/sdk = owner Somewhere-Cloud,
+# repository somewhere-sdk-js, workflow publish.yml, no environment. NPM_CLOUD_BOOTSTRAP_TOKEN is
+# set only for the first-version bootstrap and removed afterwards.
 name: Publish to npm
 
 on:
-  push:
-    tags: ['v*.*.*']
   workflow_dispatch:
 
 permissions:
@@ -52,9 +51,14 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm install -g npm@latest # existing OIDC-capable npm setup
+      - run: npm install -g npm@11.19.0 # trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm test
-      - run: npm publish --provenance --access public
+      - name: Publish (or stage the first version for maintainer approval)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_CLOUD_BOOTSTRAP_TOKEN }} # first-version bootstrap only
+          FIRST_VERSION_STAGE: ${{ vars.NPM_FIRST_VERSION_STAGE }} # unset by default
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_CLOUD_BOOTSTRAP_TOKEN is required for bootstrap" >&2; exit 1; fi
+          if [ "$FIRST_VERSION_STAGE" = "1" ]; then npm stage publish --provenance --access public
+          else npm publish --provenance --access public; fi

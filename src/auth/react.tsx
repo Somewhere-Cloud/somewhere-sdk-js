@@ -1,5 +1,5 @@
 /**
- * @somewhere-tech/sdk/react — the "you never touch a token" layer.
+ * @somewhere-cloud/sdk/react — the "you never touch a token" layer.
  *
  *   <SomewhereAuthProvider>
  *     <SignedIn><Dashboard/></SignedIn>
@@ -64,7 +64,7 @@ export function SomewhereAuthProvider(props: {
 
 function useAuthContext(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('@somewhere-tech/sdk/auth: hooks must be used inside <SomewhereAuthProvider>.');
+  if (!ctx) throw new Error('@somewhere-cloud/sdk/auth: hooks must be used inside <SomewhereAuthProvider>.');
   return ctx;
 }
 

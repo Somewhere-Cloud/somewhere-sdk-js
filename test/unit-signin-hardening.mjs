@@ -12,8 +12,8 @@
 //
 //   npm run build && node test/unit-signin-hardening.mjs
 
-import { createSomewhereAuth, AuthError } from '@somewhere-tech/sdk/auth';
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { createSomewhereAuth, AuthError } from '@somewhere-cloud/sdk/auth';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
 
 let failed = 0;
 const check = (name, cond, detail) => {

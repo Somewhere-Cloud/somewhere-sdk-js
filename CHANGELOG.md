@@ -1,10 +1,30 @@
 # Changelog
 
-All notable changes to `@somewhere-tech/sdk`.
+All notable changes to `@somewhere-cloud/sdk` (published as `@somewhere-tech/sdk` through 0.12.10).
 
 This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
+
+## 0.13.0
+
+### Changed
+
+- Published as `@somewhere-cloud/sdk`. Imports change from `@somewhere-tech/sdk`
+  (and its `/auth`, `/react`, `/server` subpaths) to `@somewhere-cloud/sdk`;
+  the exported names are the same. `@somewhere-tech/sdk` stays installable at
+  its existing versions.
+- The default platform API is `https://api.somewhere.cloud/v1`; `apiUrl`
+  overrides it.
+
+### Breaking
+
+- `functions.invoke` calls functions only at an explicit app URL: the URL passed
+  to `createClient(appUrl, key)` or `functionsUrl`. It no longer derives
+  `https://{projectId}.somewhere.tech` from a slug `projectId`; without an app
+  URL it returns `NO_FUNCTION_HOST` before any request. In a project folder the
+  CLI records the platform-reported URL as `app_url` in `.somewhere.json`, and
+  `somewhere status --json` prints it.
 
 ## 0.12.6 (2026-10-23)
 
