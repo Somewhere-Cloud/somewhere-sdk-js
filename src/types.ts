@@ -24,8 +24,8 @@ export interface SomewhereOptions {
    * The project's own URL (e.g. `https://my-app.somewhere.site`), used as the
    * host for `functions.invoke(name)` → `{functionsUrl}/api/{name}`. Set
    * automatically when you build the client with `createClient(url, key)`.
-   * When omitted, `functions.invoke` derives `https://{projectId}.somewhere.tech`
-   * if `projectId` is a slug.
+   * When omitted, `functions.invoke` returns NO_FUNCTION_HOST without a request;
+   * it never derives a host from `projectId`.
    */
   functionsUrl?: string;
   /** Inject a custom fetch implementation (tests, polyfills). */

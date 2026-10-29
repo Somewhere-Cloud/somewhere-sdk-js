@@ -63,7 +63,7 @@ export type { SomewhereOptions };
  *   - `sw.calls.createSession()`     — WebRTC SFU sessions
  *   - `sw.tasks.create(...)`         — per-project ticketing
  *
- *     import { Somewhere } from '@somewhere-tech/sdk'
+ *     import { Somewhere } from '@somewhere-cloud/sdk'
  *     const sw = new Somewhere({ key: process.env.SOMEWHERE_API_KEY, projectId: 'booking-app' })
  *
  *     const { data } = await sw.from('users').select('*').eq('id', 1)
@@ -175,7 +175,7 @@ export function projectIdFromUrl(url: string): string | undefined {
 /**
  * Create a somewhere.tech client from an application URL:
  *
- *     import { createClient } from '@somewhere-tech/sdk'
+ *     import { createClient } from '@somewhere-cloud/sdk'
  *     const client = createClient('https://booking-app.somewhere.site', undefined, {
  *       projectId: 'booking-app',
  *     })
@@ -192,7 +192,7 @@ export function projectIdFromUrl(url: string): string | undefined {
  *   (server-only). Detected by the `smt_` prefix.
  *
  * Database / auth / storage calls go to the platform REST base
- * (`https://api.somewhere.tech/v1`, override with `options.apiUrl`).
+ * (`https://api.somewhere.cloud/v1`, override with `options.apiUrl`).
  */
 export function createClient(
   somewhereUrl: string,

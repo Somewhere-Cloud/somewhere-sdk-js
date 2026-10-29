@@ -1,4 +1,4 @@
-// Live smoke test for @somewhere-tech/sdk.
+// Live smoke test for @somewhere-cloud/sdk.
 // Exercises the v0.1 surfaces against the real api.somewhere.tech.
 //
 // Required env:

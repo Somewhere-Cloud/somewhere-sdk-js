@@ -2,7 +2,7 @@
  * The session cookie is the DEFAULT, not a header opt-in (platform tsk_d05a6cfb).
  *
  * THE HOLE: somewhereAuth only called sw.auth.setSessionCookies when the caller
- * sent `X-Sw-Auth-Mode: cookie`. The @somewhere-tech/sdk/auth client sends it; a
+ * sent `X-Sw-Auth-Mode: cookie`. The @somewhere-cloud/sdk/auth client sends it; a
  * plain `fetch('/api/auth/login', { credentials: 'include' })` does not. So the
  * browser flow we publish — AGENT.md's lead example, docs({ topic:
  * 'auth-client' }) §3 — returned 200 with NO Set-Cookie against the scaffold's
@@ -21,7 +21,7 @@
  * material anywhere in the body; the explicit opt-in still gets the bundle and
  * no cookie. Plus an MFA challenge, a failed sign-in, and an app cookie.
  */
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
 
 let passed = 0;
 let failed = 0;

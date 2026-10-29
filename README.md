@@ -1,6 +1,8 @@
-# @somewhere-tech/sdk
+# @somewhere-cloud/sdk
 
-Official JavaScript and TypeScript client for [somewhere.tech](https://somewhere.tech).
+Official JavaScript and TypeScript client for [Somewhere Cloud](https://somewhere.cloud).
+
+This package was published as `@somewhere-cloud/sdk` through 0.12.10; those versions stay installable.
 
 For a browser application's database, start with the schema-generated client that the platform builds from `db/schema.ts`:
 
@@ -20,21 +22,21 @@ tables grant browser reads; hidden linking fields remain internal. Put product
 authorization and trusted database work in server functions with the runtime
 `sw.db` API.
 
-Use `@somewhere-tech/sdk` when application code needs the maintained auth adapters, function invocation, or an explicit server/non-browser client for platform resources. The package keeps its established root exports and result shapes for existing applications, but it is not a replacement for the generated browser data client.
+Use `@somewhere-cloud/sdk` when application code needs the maintained auth adapters, function invocation, or an explicit server/non-browser client for platform resources. The package keeps its established root exports and result shapes for existing applications, but it is not a replacement for the generated browser data client.
 
 ## Install
 
 ```bash
-npm install @somewhere-tech/sdk
+npm install @somewhere-cloud/sdk
 ```
 
 The package provides a root client and focused auth entry points:
 
 ```ts
-import { createClient, Somewhere } from '@somewhere-tech/sdk'
-import { createSomewhereAuth } from '@somewhere-tech/sdk/auth'
-import { SomewhereAuthProvider, useAuth, SignedIn, SignedOut } from '@somewhere-tech/sdk/react'
-import { somewhereAuth } from '@somewhere-tech/sdk/server'
+import { createClient, Somewhere } from '@somewhere-cloud/sdk'
+import { createSomewhereAuth } from '@somewhere-cloud/sdk/auth'
+import { SomewhereAuthProvider, useAuth, SignedIn, SignedOut } from '@somewhere-cloud/sdk/react'
+import { somewhereAuth } from '@somewhere-cloud/sdk/server'
 ```
 
 ## Browser auth and functions
@@ -42,7 +44,7 @@ import { somewhereAuth } from '@somewhere-tech/sdk/server'
 Browser sessions use same-origin httpOnly cookies. Page JavaScript holds no developer key or session token. Mount the standard auth handler in your application at `/api/auth`, then create a credential-free browser client:
 
 ```ts
-import { createClient } from '@somewhere-tech/sdk'
+import { createClient } from '@somewhere-cloud/sdk'
 
 const client = createClient('https://booking-app.somewhere.site', undefined, {
   projectId: 'booking-app',
@@ -77,7 +79,7 @@ The auth client also provides signup, magic-link, OAuth, sign-out, password rese
 Trusted server scripts can construct an explicit client with a developer key:
 
 ```ts
-import { Somewhere } from '@somewhere-tech/sdk'
+import { Somewhere } from '@somewhere-cloud/sdk'
 
 const client = new Somewhere({
   key: process.env.SOMEWHERE_API_KEY,
@@ -90,7 +92,7 @@ const rows = await client.db.query(
 )
 ```
 
-Never expose an `smt_` developer key in browser code. Inside a deployed somewhere.tech function, use the supplied runtime instead of constructing an SDK client:
+Never expose an `smt_` developer key in browser code. Inside a deployed Somewhere Cloud function, use the supplied runtime instead of constructing an SDK client:
 
 ```ts
 export default async function (request, sw) {

@@ -1,15 +1,15 @@
 import { mfaChallenge } from './continuation.js';
 
 /**
- * @somewhere-tech/sdk/server — the backend half, so the app writes ~zero auth code.
+ * @somewhere-cloud/sdk/server — the backend half, so the app writes ~zero auth code.
  *
  * Mount it from a single deployed function that handles your /api/auth/* routes:
  *
  *   // api/auth/[...path].ts
- *   import { somewhereAuth } from '@somewhere-tech/sdk/server';
+ *   import { somewhereAuth } from '@somewhere-cloud/sdk/server';
  *   export default (req, sw) => somewhereAuth(req, sw);
  *
- * It wires the standard endpoints the @somewhere-tech/sdk/auth client talks to onto
+ * It wires the standard endpoints the @somewhere-cloud/sdk/auth client talks to onto
  * `sw.auth.*` — which already owns the Google OAuth client, JWT validation, and
  * the bearer-token rotation contract. login/signup are developer-key-gated on the
  * platform (can't be called from the browser), which is exactly why this thin
@@ -441,7 +441,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       const d = await sw.auth.discordExchange({ code: String(b.code ?? ''), attempt: String(b.attempt ?? '') });
       return sessionResponse(d);
     }
-    return json({ error: 'NOT_FOUND', message: `No @somewhere-tech/sdk/auth route for ${method} ${sub}` }, 404);
+    return json({ error: 'NOT_FOUND', message: `No @somewhere-cloud/sdk/auth route for ${method} ${sub}` }, 404);
   } catch (err) {
     if (err && typeof err === 'object' && 'code' in err && err.code === 'MFA_REQUIRED' && 'mfa_token' in err && typeof err.mfa_token === 'string' && err.mfa_token) {
       return json({ mfa_required: true, mfa_token: err.mfa_token });

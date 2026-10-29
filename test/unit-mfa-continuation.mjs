@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { createSomewhereAuth, AuthError } from '@somewhere-tech/sdk/auth';
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
-import { createClient } from '@somewhere-tech/sdk';
+import { createSomewhereAuth, AuthError } from '@somewhere-cloud/sdk/auth';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
+import { createClient } from '@somewhere-cloud/sdk';
 
 const user = { id: 'mfa-user', email: 'mfa@example.test' };
 const challenge = { mfa_required: true, mfa_token: 'private-pending-ticket' };

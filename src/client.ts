@@ -384,10 +384,10 @@ export class Client {
     this.browserDataWarnings.add(surface);
     globalThis.console?.warn?.(
       surface === 'database'
-        ? '[@somewhere-tech/sdk] Direct browser database API calls are disabled. ' +
+        ? '[@somewhere-cloud/sdk] Direct browser database API calls are disabled. ' +
             'Use the generated somewhere:data client for operations allowed by your declared data rules, ' +
             'or call a server function that uses sw.db.'
-        : '[@somewhere-tech/sdk] Direct browser file API calls are disabled. ' +
+        : '[@somewhere-cloud/sdk] Direct browser file API calls are disabled. ' +
             'Use a declared somewhere:files collection, or call a server function that uses sw.fs.',
     );
   }

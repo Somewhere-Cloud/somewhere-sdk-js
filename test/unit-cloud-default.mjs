@@ -27,10 +27,11 @@ for (const [format, sdk] of [['ESM', esm], ['CommonJS', cjs]]) {
   await custom.functions.invoke('checkout');
   assert.equal(calls.at(-1).url, 'https://customer.example.invalid/api/checkout');
   const legacy = new sdk.Somewhere({ key: 'smt_synthetic_fixture', projectId: 'fixture', fetch });
-  await legacy.functions.invoke('checkout');
-  assert.equal(calls.at(-1).url, 'https://fixture.somewhere.tech/api/checkout');
+  const before = calls.length;
+  assert.equal((await legacy.functions.invoke('checkout')).error.code, 'NO_FUNCTION_HOST');
+  assert.equal(calls.length, before, 'no request to a host derived from projectId');
   const explicit = new sdk.Somewhere({ key: 'smt_synthetic_fixture', projectId: 'fixture', functionsUrl: 'https://fixture.somewhere.site', fetch });
   await explicit.functions.invoke('checkout');
   assert.equal(calls.at(-1).url, 'https://fixture.somewhere.site/api/checkout');
-  console.log(`${format}: cloud REST default, explicit tech/custom overrides and unchanged function hosts pass`);
+  console.log(`${format}: cloud REST default, explicit tech/custom overrides and explicit-only function hosts pass`);
 }

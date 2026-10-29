@@ -1,5 +1,5 @@
 /**
- * Robust live-surface test for @somewhere-tech/sdk (dominant-player rewrite).
+ * Robust live-surface test for @somewhere-cloud/sdk (dominant-player rewrite).
  *
  * Tests every public method against the LIVE api.somewhere.tech with a real
  * smt_ key. Exercises:

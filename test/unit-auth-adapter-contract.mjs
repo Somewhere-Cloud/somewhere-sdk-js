@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
  * public client method without classifying and exercising its adapter contract
  * must fail this suite before the package can publish again.
  */
-import { createSomewhereAuth } from '@somewhere-tech/sdk/auth';
-import { somewhereAuth } from '@somewhere-tech/sdk/server';
+import { createSomewhereAuth } from '@somewhere-cloud/sdk/auth';
+import { somewhereAuth } from '@somewhere-cloud/sdk/server';
 import { readFileSync } from 'node:fs';
 
 let passed = 0;
@@ -22,9 +22,9 @@ const check = (name, condition) => {
   }
 };
 
-const authModule = await import('@somewhere-tech/sdk/auth');
-const reactModule = await import('@somewhere-tech/sdk/react');
-const serverModule = await import('@somewhere-tech/sdk/server');
+const authModule = await import('@somewhere-cloud/sdk/auth');
+const reactModule = await import('@somewhere-cloud/sdk/react');
+const serverModule = await import('@somewhere-cloud/sdk/server');
 check('auth subpath exports the complete framework-agnostic runtime surface',
   JSON.stringify(Object.keys(authModule).sort()) === JSON.stringify([
     'AuthError',
@@ -275,4 +275,4 @@ check('OAuth starts go through oauthStart per provider, with callbacks under /ap
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
-process.stdout.write('[ OK  @somewhere-tech/sdk ] exhaustive client ↔ adapter contract matrix verified\n');
+process.stdout.write('[ OK  @somewhere-cloud/sdk ] exhaustive client ↔ adapter contract matrix verified\n');

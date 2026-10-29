@@ -108,7 +108,7 @@ async function main() {
     check('POSTs the app route, not the platform', call.url === '/api/auth/login');
     check("sends credentials:'include'", call.credentials === 'include');
     check('sends NO Authorization header', !call.headers.Authorization);
-    check('uses the shared @somewhere-tech/sdk/server cookie handshake',
+    check('uses the shared @somewhere-cloud/sdk/server cookie handshake',
       call.headers['X-Sw-Auth-Mode'] === 'cookie');
     check('no error', error === null);
     check('returns the user', data?.user?.id === 'usr_1');

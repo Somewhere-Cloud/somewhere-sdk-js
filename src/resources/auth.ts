@@ -44,7 +44,7 @@ import type {
  * transport — nobody gets logged out by the default flip.
  */
 /** localStorage key for the cached (non-secret) user object in cookie mode.
- *  Shared with @somewhere-tech/sdk/auth and the legacy auth-package shim. */
+ *  Shared with @somewhere-cloud/sdk/auth and the legacy auth-package shim. */
 const USER_CACHE_KEY = 'sw_auth_user';
 
 function loadCachedUser(): User | null {
@@ -698,7 +698,7 @@ export class AuthClient {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          // Shared with @somewhere-tech/sdk/server. Raw *WithCookie handlers
+          // Shared with @somewhere-cloud/sdk/server. Raw *WithCookie handlers
           // ignore it; the adapter uses it to withhold tokens from the body.
           'X-Sw-Auth-Mode': 'cookie',
         },
