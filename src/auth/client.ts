@@ -139,9 +139,9 @@ export interface AuthState {
   /** 'SESSION_CHECK_FAILED' in 'indeterminate'; 'SIGN_OUT_UNCONFIRMED' while a
    *  sign-out is still owed to the server. */
   error: AuthError | null;
-  /** True after a signOut() whose server call failed: the server session may
-   *  still exist. Cleared when a later signOut() reaches the server, /me
-   *  answers definitively, or a sign-in replaces the session. */
+  /** True after an unconfirmed signOut(), including a reload before its reply:
+   *  the server session may still exist. Cleared by confirmed logout or a new
+   *  successful sign-in. Cookie logout intent survives page reload. */
   signOutUnconfirmed: boolean;
   /** True from a signOut() call until its /logout is answered (or fails or
    *  times out). The last-known `user` remains while pending so user-null UI
@@ -296,8 +296,29 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // credentials out of page JavaScript. Header mode exists only for non-browser
   // clients and rule-9 compatibility with pre-0.2.0/older-handler sessions.
   const preferCookie = options.mode ? options.mode === 'cookie' : typeof document !== 'undefined';
+  // No credentials: retain logout intent across navigation, including navigation
+  // before the queued request starts. Only a confirmed new sign-in replaces it.
+  const signOutKey = `${userKey}:sign-out:${baseUrl}${authPath}`;
+  let signOutIntent: string | null = null;
+  let signOutStorageAvailable = true;
+  function readSignOutIntent(): string | null {
+    if (preferCookie && signOutStorageAvailable) {
+      try { signOutIntent = storage.getItem(signOutKey); } catch { /* retain memory state */ }
+    }
+    return signOutIntent;
+  }
+  function writeSignOutIntent(next: string | null) {
+    signOutIntent = next;
+    if (preferCookie) {
+      try {
+        if (next === null) storage.removeItem(signOutKey);
+        else storage.setItem(signOutKey, next);
+      } catch { signOutStorageAvailable = false; }
+    }
+  }
+  const restoredSignOut = readSignOutIntent();
 
-  let session: Session | null = loadSession();
+  let session: Session | null = restoredSignOut ? null : loadSession();
   // Optimistic restore: seed the user from cache so a fresh page load paints
   // the signed-in UI immediately and a transient /me failure (offline, 5xx)
   // never flashes logged-out. In header mode only trust the cache when a
@@ -310,10 +331,11 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // transport) so the upgrade logs nobody out; it migrates to cookies on the
   // next sign-in.
   let pendingMfa: string | null = null;
-  let user: User | null = session || preferCookie ? loadUser() : null;
+  let user: User | null = !restoredSignOut && (session || preferCookie) ? loadUser() : null;
   // A cached user is unverified until the backend answers.
-  let status: AuthStatus = session || preferCookie ? 'checking' : 'signed-out';
-  let error: AuthError | null = null;
+  let status: AuthStatus = !restoredSignOut && (session || preferCookie) ? 'checking' : 'signed-out';
+  let error: AuthError | null = restoredSignOut?.startsWith('pending:')
+    ? new AuthError('Sign-out has not been confirmed by the server.', 0, 'SIGN_OUT_UNCONFIRMED') : null;
   // Advances when an identity change is REQUESTED (sign-in family, signOut) or
   // arrives from another tab. Responses to requests started under an earlier
   // generation never write user, session or status.
@@ -325,9 +347,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   const mutationTimeoutMs = mutationTimeout(options.mutationTimeoutMs);
   // A sign-out the server has not confirmed. It stays owed (state
   // signOutUnconfirmed + error) and the next signOut() retries it, with the
-  // header session it was for, until /logout succeeds, /me answers
-  // definitively, or a sign-in replaces the session.
-  let owedSignOut: { session: Session | null; error: AuthError } | null = null;
+  // header session it was for, until /logout succeeds or a sign-in replaces
+  // the session. Cookie clients retain intent across reload as well.
+  let owedSignOut: { session: Session | null; error: AuthError } | null = error ? { session: null, error } : null;
   // signOut() calls whose /logout has not settled yet (AuthState.signingOut).
   let signOutsInFlight = 0;
   // At most one /me per generation; concurrent getUser() calls share it.
@@ -496,7 +518,16 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // key === null means storage.clear().
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('storage', (e: StorageEvent) => {
-      if (e.key !== null && e.key !== key && e.key !== userKey) return;
+      if (e.key !== null && e.key !== key && e.key !== userKey && e.key !== signOutKey) return;
+      const intent = readSignOutIntent();
+      if (intent) {
+        generation++;
+        writeSession(null);
+        owedSignOut = intent.startsWith('pending:')
+          ? { session: null, error: new AuthError('Sign-out has not been confirmed by the server.', 0, 'SIGN_OUT_UNCONFIRMED') } : null;
+        settle('signed-out', null);
+        return;
+      }
       const nextSession = loadSession();
       const nextUser = nextSession || preferCookie ? loadUser() : null;
       const identityChanged = (nextUser?.id ?? null) !== (user?.id ?? null) || !nextSession !== !session;
@@ -523,7 +554,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // client also refreshes before sending protected work. No password is involved.
   function scheduleRefresh(delay?: number) {
     if (refreshTimer !== undefined) clearTimeout(refreshTimer);
-    if (status !== 'authenticated' || refreshUncertain) return;
+    if (status !== 'authenticated' || refreshUncertain || readSignOutIntent()) return;
     // An unknown expiry is not an expired one: refreshing at once raced the page change that follows
     // a sign-in (pfb_01e440702f31). The next session check learns the expiry (X-Sw-Access-Expires).
     if (delay === undefined) {
@@ -535,11 +566,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     refreshTimer = setTimeout(() => { void refreshSession(true).catch(() => undefined); }, delay);
   }
   function refreshSession(background = false): Promise<void> {
+    if (readSignOutIntent()) return Promise.resolve();
     if (refreshFlight) return refreshFlight;
     if (refreshUncertain) return Promise.reject(new AuthError('Refresh outcome is unknown. Sign in again to establish a new session.', 0, 'REFRESH_OUTCOME_UNKNOWN'));
     const started = generation;
     const run = async (signal: AbortSignal) => {
-      if (started !== generation || status === 'signed-out') return;
+      if (started !== generation || status === 'signed-out' || readSignOutIntent()) return;
       // Another browser tab may have refreshed while this one awaited the lock.
       let sharedAt = 0;
       try { sharedAt = Number(storage.getItem(refreshStampKey)); } catch { /* storage can be unavailable */ }
@@ -551,17 +583,17 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       beginRefresh();
       const headers: Record<string, string> = { 'X-Sw-Auth-Mode': preferCookie ? 'cookie' : 'header' };
       if (session) { headers.Authorization = 'Bearer ' + session.accessToken; headers[RIDE_ALONG_HEADER] = session.refreshToken; }
-      // keepalive: a page change no longer cancels a refresh that may already be rotating, so its
-      // Set-Cookie can still land (a mitigation for lost responses, not full network-loss recovery).
-      // The mutation deadline (signal) still bounds it.
-      const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal, keepalive: true });
-      if (started !== generation || signal.aborted) return;
+      // Cookie refresh must not outlive its document and overwrite cookies from
+      // a newer sign-in. Interrupted rotations retain the existing unknown-outcome
+      // marker; they are reconciled without replaying a possibly consumed token.
+      const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal, keepalive: !preferCookie });
+      if (started !== generation || signal.aborted || readSignOutIntent()) return;
       if (res.status === 401 || res.status === 403) {
         confirmRefresh(); writeSession(null); settle('signed-out', null); return;
       }
       if (!res.ok) throw new AuthError('Session refresh unavailable.', res.status);
       const body = await res.json() as TokenResponse & { expires_at?: number };
-      if (started !== generation || signal.aborted) return;
+      if (started !== generation || signal.aborted || readSignOutIntent()) return;
       if (!preferCookie) {
         const tokens = pickTokens(body);
         if (!tokens) throw new AuthError('Refresh did not return credentials.', 502);
@@ -610,6 +642,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return fetch(target, { ...init, headers });
   };
   const send = async (input: RequestInfo | URL, init: RequestInit = {}, mayOverlapRefresh: boolean): Promise<Response> => {
+    if (readSignOutIntent()) {
+      const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+      headers.delete('Authorization');
+      headers.delete(RIDE_ALONG_HEADER);
+      return fetch(input, { ...init, headers, credentials: 'omit' });
+    }
     if (refreshUncertain) {
       if (status !== 'authenticated') throw new AuthError('Refresh outcome is unknown. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
       // Reconciled: the held access token still answers, but the refresh credential behind it may
@@ -625,6 +663,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       && Number.isFinite(accessExpiresAt) && accessExpiresAt - Date.now() >= CONCURRENT_READ_MIN_MS;
     if (flight && !overlap) await flight;
     else if (!flight && pendingMutations === 0 && status === 'authenticated' && Date.now() >= nextRefreshAt) await refreshSession();
+    if (readSignOutIntent()) return send(input, init, false);
     const started = generation;
     if (overlap && flight) {
       const res = await sendDuringRefresh(input, init);
@@ -765,9 +804,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       accessExpiresAt = Number((d as { expires_at?: number }).expires_at) || 0;
       if (preferCookie && (d.cookie_session === true || body.cookie_session === true)) {
         if (session) { writeSession(null); accessExpiresAt = Number((d as { expires_at?: number }).expires_at) || 0; }
-        owedSignOut = null; // this session replaces the one the owed sign-out was for
-        if (d.user) settle('authenticated', d.user);
-        else await checkNow(mine, signal);
+        if (d.user) {
+          if (!isAuthUser(d.user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
+          owedSignOut = null; // this confirmed identity replaces the owed session
+          writeSignOutIntent(null);
+          settle('authenticated', d.user);
+        } else await checkNow(mine, signal, true);
         stillCurrent();
         if (!isAuthUser(user)) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
         pendingMfa = null;
@@ -813,8 +855,9 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 
   /** One /me round-trip. Writes state only if `started` is still current and
    *  the caller's `signal` (a queued call's deadline) has not fired. */
-  async function checkNow(started: number, signal?: AbortSignal): Promise<User | null> {
-    const stale = () => started !== generation || signal?.aborted === true;
+  async function checkNow(started: number, signal?: AbortSignal, completingSignIn = false): Promise<User | null> {
+    const stale = () => started !== generation || signal?.aborted === true || (!completingSignIn && !!readSignOutIntent());
+    if (stale()) return user;
     if (refreshUncertain) return reconcileUnknownRefresh(started, signal);
     const cookie = !session && preferCookie;
     if (!cookie && !session) {
@@ -876,9 +919,10 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       indeterminate(res.status);
       return user;
     }
-    // Definitive either way: no session (the owed sign-out is moot), or the
-    // server still holds one (reported as authenticated; signOut() again).
+    if (completingSignIn && !u) throw new AuthError('Auth response did not include a valid user.', 502, 'INVALID_AUTH_RESPONSE');
+    // Only an explicit successful sign-in can replace durable logout intent.
     owedSignOut = null;
+    if (completingSignIn && u) writeSignOutIntent(null);
     settle(u ? 'authenticated' : 'signed-out', u);
     return u;
   }
@@ -898,7 +942,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
    *  dead local marker and session are cleared and a sign-in is asked for. A failed check stays
    *  indeterminate and the next getUser() checks again, never a permanent no-op. */
   async function reconcileUnknownRefresh(started: number, signal?: AbortSignal): Promise<User | null> {
-    const stale = () => started !== generation || signal?.aborted === true;
+    const stale = () => started !== generation || signal?.aborted === true || !!readSignOutIntent();
+    if (stale()) return user;
     refreshUncertain = true;
     let res: Response;
     try { res = await (signal ? probeWithoutRotation(signal) : enqueue(probeWithoutRotation)); }
@@ -908,7 +953,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   }
 
   async function settleReconciled(res: Response, started: number, signal?: AbortSignal): Promise<User | null> {
-    const stale = () => started !== generation || signal?.aborted === true;
+    const stale = () => started !== generation || signal?.aborted === true || !!readSignOutIntent();
+    if (stale()) return user;
     refreshUncertain = true;
     if (res.status !== 401 && !res.ok) { indeterminate(res.status); return user; }
     const u = res.status === 401 ? null : readUser(await res.json().catch(() => undefined));
@@ -941,7 +987,16 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (check && check.generation === generation) return check.promise;
     const started = generation;
     const promise: Promise<User | null> = mutations
-      .then(() => checkNow(started))
+      .then(() => {
+        if (started !== generation) return user;
+        const intent = readSignOutIntent();
+        if (intent) {
+          if (intent.startsWith('pending:')) return client.signOut().then(() => null);
+          settle('signed-out', null);
+          return null;
+        }
+        return checkNow(started);
+      })
       .finally(() => {
         if (check?.promise === promise) check = null;
       });
@@ -949,7 +1004,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return promise;
   }
 
-  return {
+  const client: SomewhereAuth = {
     fetch: authFetch,
     signUp: (i) => postForSession('/signup', { email: i.email, password: i.password, display_name: i.displayName }),
     signIn: (i) => postForSession('/login', { email: i.email, password: i.password }),
@@ -1019,11 +1074,12 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     },
     signOut: () => {
       pendingMfa = null;
+      const existingIntent = readSignOutIntent();
       // An owed sign-out is retried with the header session it was for.
       const had = session ?? owedSignOut?.session ?? null;
       // Something to end server-side: an owed sign-out, a header session, a
       // known or pending cookie identity, or a sign-in queued ahead of this call.
-      const serverWork = owedSignOut !== null || !!had
+      const serverWork = existingIntent?.startsWith('pending:') || owedSignOut !== null || !!had
         || (preferCookie && (!!user || status !== 'signed-out' || pendingMutations > 0));
       // Invalidate earlier checks/rotations and drop credentials immediately.
       // Retain the last-known user until settlement: a user-null UI can trigger
@@ -1033,6 +1089,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // Pending until /logout is answered: consumers show "signing out", not
       // "signed out", while the server may still accept the session.
       if (!serverWork) { settle('signed-out', null); return Promise.resolve(); }
+      const intent = existingIntent?.startsWith('pending:') ? existingIntent : `pending:${Date.now()}:${Math.random()}`;
+      if (preferCookie) writeSignOutIntent(intent);
       signOutsInFlight++;
       status = 'checking';
       scheduleRefresh();
@@ -1050,14 +1108,16 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // call. Resolves either way; a failure stays owed (signOutUnconfirmed,
       // error 'SIGN_OUT_UNCONFIRMED') and the next signOut() retries it.
       return enqueue(async (signal) => {
+        // A new sign-in in another tab may have replaced this queued logout.
+        if (preferCookie && readSignOutIntent() !== intent) return;
         let res: Response;
         try {
           res = await fetch(url('/logout'), {
             method: 'POST',
-            // Keep an already-started revoke and cookie-clearing response alive
-            // if the consumer navigates before awaiting signOut().
-            // Network failures and the mutation deadline still remain unconfirmed.
-            keepalive: true,
+            // Cookie logout is resumed from durable intent after navigation.
+            // Do not let the old document's late Set-Cookie erase a newer login.
+            // Header revocation has no browser cookie response to race.
+            keepalive: !preferCookie,
             // A header session is revoked by its refresh token, sent as the same
             // ride-along header authFetch uses; the access bearer alone revokes
             // nothing. `had` is captured at call time, so a retry resends the
@@ -1083,6 +1143,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         if (res.body !== null && res.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'application/json') {
           void res.text().catch(() => {});
         }
+        if (preferCookie && readSignOutIntent() === intent) writeSignOutIntent(intent.replace('pending:', 'confirmed:'));
         owedSignOut = null;
         if (error?.code === 'SIGN_OUT_UNCONFIRMED') error = null;
         emit();
@@ -1156,6 +1217,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       },
     },
   };
+  return client;
 }
 
 export class AuthError extends Error {

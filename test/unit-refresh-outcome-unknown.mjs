@@ -1,6 +1,6 @@
 // A refresh cut off after the server may have committed its rotation (platform tsk_8c5a0244 tcm_53f1f276).
 // MITIGATION only, not full network-loss recovery and not a proven fix for the Journey incident:
-//  - the refresh POST is sent with keepalive, so a page change no longer cancels it and its Set-Cookie can land;
+//  - cookie refresh is cancellable: a prior document must not overwrite a newer sign-in's cookies;
 //  - an interrupted, aborted or timed-out refresh stays OUTCOME-UNKNOWN (indeterminate), never a sign-out,
 //    and is never retried by the client; only a definitive 401/403 signs out;
 //  - another tab sharing the storage never starts a second rotation while that outcome is unknown;
@@ -35,14 +35,14 @@ let passed = 0;
 const test = async (name, fn) => { calls.length = 0; await fn(); passed++; console.log('  ok   ' + name); };
 
 try {
-  await test('the refresh POST is sent with keepalive (a page change no longer cancels it)', async () => {
+  await test('cookie refresh is cancellable across navigation (unknown-outcome marker protects rotation)', async () => {
     const { auth } = await signedIn();
     now += 61_000;
     globalThis.fetch = route({ '/api/auth/refresh': session, '/data': () => Response.json({ ok: true }) });
     assert.equal((await auth.fetch('https://app.test/data')).status, 200);
     const refresh = calls.find(c => c.path === '/api/auth/refresh');
     assert.ok(refresh, 'a demand refresh ran');
-    assert.equal(refresh.init.keepalive, true);
+    assert.equal(refresh.init.keepalive, false);
     assert.equal(refresh.init.method, 'POST');
   });
 

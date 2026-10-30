@@ -14,17 +14,37 @@ import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = await mkdtemp(join(tmpdir(), 'sdk-signout-'));
 let failLogout = false;
+let failLogin = false;
+let logoutDelays = [];
+let accessLife = 60_000;
+let refreshEvents = [];
 let events = [];
 let browser;
 const results = [];
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   const reply = (body, status = 200) => {
-    res.writeHead(status, { 'Content-Type': 'application/json', 'X-Sw-Access-Expires': String(Date.now() + 60_000) });
+    res.writeHead(status, { 'Content-Type': 'application/json', 'X-Sw-Access-Expires': String(Date.now() + accessLife) });
     res.end(JSON.stringify(body));
   };
   if (path === '/api/auth/me') {
     return reply({ user: req.headers.cookie?.includes('fixture_session=yes') ? { id: 'fixture-user', email: 'fixture@example.invalid' } : null });
+  }
+  if (path === '/api/auth/login') {
+    if (failLogin) return reply({ error: 'invalid credentials' }, 401);
+    res.setHeader('Set-Cookie', 'fixture_session=yes; HttpOnly; Path=/');
+    return reply({ cookie_session: true, user: { id: 'fixture-user', email: 'fixture@example.invalid' } });
+  }
+  if (path === '/api/auth/refresh') {
+    const event = { arrived: Date.now(), finished: null, closed: null };
+    refreshEvents.push(event);
+    res.on('close', () => { event.closed = Date.now(); });
+    setTimeout(() => {
+      event.finished = Date.now();
+      res.setHeader('Set-Cookie', 'fixture_session=old; HttpOnly; Path=/');
+      reply({ user: { id: 'fixture-user', email: 'fixture@example.invalid' }, expires_at: Date.now() + 60_000 });
+    }, 1000);
+    return;
   }
   if (path === '/api/auth/logout') {
     const event = { arrived: Date.now(), finished: null, closed: null, failure: failLogout };
@@ -35,7 +55,7 @@ const server = createServer(async (req, res) => {
       if (event.failure) return reply({ error: 'fixture failure' }, 503);
       res.setHeader('Set-Cookie', 'fixture_session=; HttpOnly; Path=/; Max-Age=0');
       reply({ ok: true });
-    }, 400);
+    }, logoutDelays.shift() ?? 400);
     return;
   }
   if (path === '/app.js') {
@@ -107,6 +127,8 @@ try {
   while (!events.length && Date.now() < deadline) await manual.page.waitForTimeout(5);
   assert.equal(events.length, 1);
   await manual.page.reload();
+  await manual.page.waitForFunction(() => document.querySelector('[data-testid="status"]')?.textContent !== 'checking');
+  assert.equal(await manual.page.getByTestId('natural-private').count(), 0, 'first reload during logout must not restore authenticated UI');
   await manual.page.waitForTimeout(650);
   assert.equal((await manual.context.cookies()).some(cookie => cookie.name === 'fixture_session'), false);
   await manual.page.reload();
@@ -114,6 +136,89 @@ try {
   assert.equal(await manual.page.getByTestId('logout').count(), 0);
   results.push({ case: 'manual navigation after request started', cookieCleared: true, subsequentCheckSignedOut: true, events });
   await manual.context.close();
+
+  // Navigation before the logout can acquire the shared mutation lock. The
+  // replacement document must finish the real logout before ever restoring UI.
+  events = [];
+  const queued = await open();
+  await queued.page.evaluate(() => {
+    void navigator.locks.request('sw_auth_user:refresh-at', () => {
+      window.fixtureLockHeld = true;
+      return new Promise(() => {});
+    });
+  });
+  await queued.page.waitForFunction(() => window.fixtureLockHeld === true);
+  await queued.page.getByTestId('logout').click();
+  assert.equal(events.length, 0, 'logout has not reached the server');
+  await queued.page.reload();
+  await queued.page.getByTestId('natural-form').waitFor();
+  await queued.page.waitForTimeout(650);
+  assert.equal(await queued.page.getByTestId('natural-private').count(), 0);
+  assert.equal((await queued.context.cookies()).some(c => c.name === 'fixture_session'), false);
+  results.push({ case: 'reload before request begins', signedOut: true, events });
+  await queued.context.close();
+
+  // Failure persists across reload. Bootstrap cannot convert an old surviving
+  // cookie into a new sign-in, but an explicit successful sign-in can recover.
+  failLogout = true;
+  const failed = await open();
+  await failed.page.getByTestId('logout').click();
+  await failed.page.getByTestId('natural-form').waitFor();
+  await failed.page.reload();
+  await failed.page.getByTestId('natural-form').waitFor();
+  assert.equal(await failed.page.getByTestId('unconfirmed').innerText(), 'true');
+  assert.equal((await failed.context.cookies()).some(c => c.name === 'fixture_session'), true);
+  failLogin = true;
+  await failed.page.evaluate(() => window.fixtureAuth.signIn({ email: 'fixture@example.invalid', password: 'fixture' }).catch(() => {}));
+  assert.equal(await failed.page.getByTestId('natural-private').count(), 0);
+  failLogin = false;
+  await failed.page.evaluate(() => window.fixtureAuth.signIn({ email: 'fixture@example.invalid', password: 'fixture' }));
+  await failed.page.getByTestId('natural-private').waitFor();
+  await failed.page.reload();
+  await failed.page.getByTestId('natural-private').waitFor();
+  failLogout = false;
+  await failed.page.getByTestId('logout').click();
+  await failed.page.getByTestId('natural-form').waitFor();
+  results.push({ case: 'failed logout reload and explicit sign-in recovery', passed: true });
+  await failed.context.close();
+
+  // A previous document's delayed logout response must not erase cookies from
+  // an explicit new sign-in after the replacement document finishes its retry.
+  events = []; logoutDelays = [1000, 50];
+  const late = await open();
+  await late.page.getByTestId('logout').click();
+  const lateDeadline = Date.now() + 5000;
+  while (!events.length && Date.now() < lateDeadline) await late.page.waitForTimeout(5);
+  assert.equal(events.length, 1, 'prior-document logout reached server');
+  await late.page.reload();
+  await late.page.getByTestId('natural-form').waitFor();
+  await late.page.evaluate(() => window.fixtureAuth.signIn({ email: 'fixture@example.invalid', password: 'fixture' }));
+  await late.page.getByTestId('natural-private').waitFor();
+  await late.page.waitForTimeout(1200);
+  await late.page.reload();
+  await late.page.getByTestId('natural-private').waitFor();
+  results.push({ case: 'new explicit sign-in survives prior-document late logout', passed: true, events });
+  await late.context.close();
+
+  // Sign-out supersedes an in-flight cookie refresh, including its browser
+  // cookie side effect after navigation and a subsequent explicit sign-in.
+  accessLife = 1000; refreshEvents = [];
+  const refreshing = await open();
+  const refreshDeadline = Date.now() + 5000;
+  while (!refreshEvents.length && Date.now() < refreshDeadline) await refreshing.page.waitForTimeout(5);
+  assert.equal(refreshEvents.length, 1, 'background refresh reached server');
+  accessLife = 60_000;
+  await refreshing.page.getByTestId('logout').click();
+  await refreshing.page.reload();
+  await refreshing.page.getByTestId('natural-form').waitFor();
+  await refreshing.page.evaluate(() => window.fixtureAuth.signIn({ email: 'fixture@example.invalid', password: 'fixture' }));
+  await refreshing.page.getByTestId('natural-private').waitFor();
+  await refreshing.page.waitForTimeout(1200);
+  assert.equal((await refreshing.context.cookies()).find(c => c.name === 'fixture_session')?.value, 'yes', 'late refresh cannot replace explicit login cookies');
+  await refreshing.page.reload();
+  await refreshing.page.getByTestId('natural-private').waitFor();
+  results.push({ case: 'sign-out supersedes in-flight refresh across navigation and sign-in', passed: true, refreshEvents });
+  await refreshing.context.close();
   console.log(JSON.stringify({ passed: true, results }, null, 2));
 } finally {
   await browser?.close();
