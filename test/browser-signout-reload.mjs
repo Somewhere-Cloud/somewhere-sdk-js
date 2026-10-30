@@ -117,9 +117,9 @@ try {
   results.push({ case: 'retry', confirmed: true, events });
   await context.close();
 
-  // keepalive protects an already-started request even if the user manually
-  // reloads before awaiting it. The first new-page /me can precede logout;
-  // only the response and subsequent check are asserted here.
+  // Durable intent survives navigation while the original logout is cancelled.
+  // The new document retries logout without restoring authenticated UI; assert
+  // both the first-reload gate and eventual removal of the session cookie.
   events = [];
   const manual = await open();
   await manual.page.getByTestId('logout').click();
