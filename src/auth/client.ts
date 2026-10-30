@@ -1,3 +1,4 @@
+import { earlySessionNames, takeEarlySession } from './early-session.js';
 import { isAuthUser, mfaChallenge } from './continuation.js';
 
 /**
@@ -364,6 +365,17 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   let nextRefreshAt = 0;
   const refreshStampKey = userKey + ':refresh-at';
   const refreshPendingKey = userKey + ':refresh-pending';
+  // Cross-tab: written at the START of every sign-in family call and sign-out,
+  // so other tabs discard checks (including an early page check) that began
+  // before a session change, not only after it completes.
+  const earlyNames = earlySessionNames(key, baseUrl, authPath);
+  const mutationKey = earlyNames.mutation;
+  function markMutationStart() {
+    if (!preferCookie) return;
+    try { storage.setItem(mutationKey, String(Date.now()) + ':' + Math.random()); } catch { /* optional cross-tab coordination */ }
+  }
+  // The page's early session check (early-session.ts) is adopted at most once.
+  let earlyTaken = false;
   function beginRefresh() {
     if (storage.getItem(refreshPendingKey)) throw new AuthError('Another refresh has an unknown outcome. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
     const marker = String(Date.now()) + ':' + Math.random();
@@ -518,7 +530,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // key === null means storage.clear().
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('storage', (e: StorageEvent) => {
-      if (e.key !== null && e.key !== key && e.key !== userKey && e.key !== signOutKey) return;
+      if (e.key !== null && e.key !== key && e.key !== userKey && e.key !== signOutKey && e.key !== mutationKey) return;
       const intent = readSignOutIntent();
       if (intent) {
         generation++;
@@ -526,6 +538,16 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         owedSignOut = intent.startsWith('pending:')
           ? { session: null, error: new AuthError('Sign-out has not been confirmed by the server.', 0, 'SIGN_OUT_UNCONFIRMED') } : null;
         settle('signed-out', null);
+        return;
+      }
+      if (e.key === mutationKey) {
+        // Another tab STARTED a sign-in or sign-out: nothing this tab has in
+        // flight may settle the state; ask again (its completion re-checks too).
+        generation++;
+        status = 'checking';
+        error = null;
+        emit();
+        void getUser();
         return;
       }
       const nextSession = loadSession();
@@ -766,6 +788,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (!completingMfa) pendingMfa = null;
     // Intent: from this call on, earlier checks and updates no longer apply.
     const mine = ++generation;
+    markMutationStart();
     try { storage.removeItem(refreshStampKey); } catch { /* optional cross-tab coordination */ }
     const run = enqueue(async (signal) => {
       // Before any write: a timed-out or superseded call changes nothing.
@@ -889,9 +912,30 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
           return reply;
         } catch (e) { if (mayRotate && !checkSignal.aborted && started === generation) refreshUncertain = true; throw e; }
       };
-      res = cookie
+      // The page's early check (early-session.ts) is this same first /me,
+      // started during HTML parse. Adopted only for the first check of an
+      // untouched page: generation 0, nothing queued, and no session change
+      // started in any tab since it began. Otherwise it is discarded.
+      const early = cookie && !earlyTaken && started === 0 && pendingMutations === 0 ? (earlyTaken = true, takeEarlySession(earlyNames)) : null;
+      let adopted: Response | null = null;
+      if (early) {
+        let answer: { res: Response; mayRotate: boolean } | null;
+        try { answer = await early.promise; }
+        catch (e) { if (refreshOrphaned() && started === generation) refreshUncertain = true; throw e; }
+        let mutationNow: string | null = null;
+        try { mutationNow = storage.getItem(mutationKey); } catch { /* treat as unchanged */ mutationNow = early.mutation; }
+        if (answer && started === generation && mutationNow === early.mutation) {
+          adopted = answer.res;
+          if (answer.mayRotate && !adopted.ok && adopted.status !== 401 && adopted.status !== 403) refreshUncertain = true;
+          const expiry = Number(adopted.headers.get('X-Sw-Access-Expires'));
+          if (Number.isFinite(expiry) && expiry > Date.now()) accessExpiresAt = expiry;
+        }
+      }
+      // A check that went stale while it waited (a newer generation runs its own) sends nothing.
+      if (!adopted && stale()) return user;
+      res = adopted ?? (cookie
         ? await (signal ? cookieCheck(signal) : enqueue(cookieCheck))
-        : await authFetch(url('/me'), { method: 'GET', signal });
+        : await authFetch(url('/me'), { method: 'GET', signal }));
     } catch {
       // A refresh with an unknown outcome surfaced here: reconcile it now rather than on a later call.
       if (!stale() && refreshUncertain) return reconcileUnknownRefresh(started, signal);
@@ -1085,6 +1129,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // Retain the last-known user until settlement: a user-null UI can trigger
       // navigation before this queued request has even started.
       const mine = ++generation;
+      markMutationStart();
       writeSession(null);
       // Pending until /logout is answered: consumers show "signing out", not
       // "signed out", while the server may still accept the session.
