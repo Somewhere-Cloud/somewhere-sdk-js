@@ -1,6 +1,7 @@
 // Early session check (platform tsk_c09746b9): the page starts the client's
 // first GET /api/auth/me during HTML parse and the client adopts that answer.
-// Proves, both directions, with the REAL inline script source and the built client:
+// Proves, both directions, with the REAL inline script source, the built client and
+// Node's real Web Locks (navigator.locks):
 //  - adopted: one /me in total, signed-in and signed-out alike;
 //  - stands down (no request) on a recorded sign-out or an unknown refresh outcome;
 //  - discarded, never written, after a sign-in/sign-out started in this tab, or one
@@ -22,7 +23,9 @@ function page() {
   const events = new EventTarget();
   const calls = [];
   const fetch = (input, init = {}) => new Promise((resolve, reject) => {
-    calls.push({ path: String(input), init, headers: new Headers(init.headers), resolve, reject });
+    const call = { path: String(input), init, headers: new Headers(init.headers), resolve, reject, aborted: false };
+    init.signal?.addEventListener('abort', () => { call.aborted = true; reject(new DOMException('The operation was aborted.', 'AbortError')); });
+    calls.push(call);
   });
   Object.assign(globalThis, {
     window: globalThis, localStorage: storage, fetch,
@@ -31,7 +34,7 @@ function page() {
     dispatchEvent: events.dispatchEvent.bind(events),
   });
   delete globalThis.__swEarlySession;
-  return { storage, calls, otherTab(key, value) { storage.setItem(key, value); events.dispatchEvent(Object.assign(new Event('storage'), { key })); } };
+  return { storage, calls, lifecycle(type) { events.dispatchEvent(new Event(type)); }, otherTab(key, value) { storage.setItem(key, value); events.dispatchEvent(Object.assign(new Event('storage'), { key })); } };
 }
 const me = (u) => Response.json({ user: u });
 const runEarlyScript = () => new Function(earlySessionScript())();
@@ -269,6 +272,142 @@ await test('the page script holds the client\'s own refresh lock name while its 
   finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
   assert.deepEqual(names, [N.stamp]);
   p.calls[0].resolve(me(user));
+});
+
+const heldLocks = async () => (await navigator.locks.query()).held.map((l) => l.name);
+
+await test('a never-settling early /me holds the real refresh lock; a sign-out aborts it and completes', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  assert.deepEqual(await heldLocks(), [N.stamp], 'the early request holds the client\'s refresh lock');
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const out = auth.signOut();
+  await flush();
+  assert.equal(p.calls[0].aborted, true, 'the sign-out aborted the hung early /me');
+  assert.ok(p.storage.getItem(N.pending), 'outcome unknown: its marker is kept, never retried');
+  const logout = p.calls.find((c) => c.path.endsWith('/logout'));
+  assert.ok(logout, 'the queued logout got the lock and went out');
+  logout.resolve(Response.json({ ok: true }));
+  await out;
+  assert.equal(auth.getState().status, 'signed-out');
+  assert.deepEqual(await heldLocks(), [], 'no lock left held');
+  assert.equal(meCalls(p.calls).length, 1, 'no rotating retry');
+});
+
+await test('a never-settling early /me adopted by the first check: aborted at the client deadline, reconciled without rotating', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage, mutationTimeoutMs: 50 });
+  const got = auth.getUser();
+  await new Promise((r) => setTimeout(r, 80));
+  await flush();
+  assert.equal(p.calls[0].aborted, true, 'aborted at the deadline');
+  const probes = meCalls(p.calls);
+  assert.equal(probes.length, 2, 'one follow-up probe');
+  assert.equal(probes[1].headers.get('X-No-Auto-Refresh'), '1', 'the follow-up never rotates');
+  probes[1].resolve(me(user));
+  assert.deepEqual(await got, user, 'first auth completes');
+  assert.deepEqual(await heldLocks(), []);
+});
+
+await test('with no client at all, the script\'s own deadline aborts the request and releases the lock', async () => {
+  const p = page();
+  const realSetTimeout = globalThis.setTimeout;
+  const deadlines = [];
+  globalThis.setTimeout = (fn, ms, ...rest) => (ms === 30_000 ? (deadlines.push(fn), 0) : realSetTimeout(fn, ms, ...rest));
+  try { runEarlyScript(); } finally { globalThis.setTimeout = realSetTimeout; }
+  await flush();
+  assert.deepEqual(await heldLocks(), [N.stamp]);
+  assert.equal(deadlines.length, 1, 'a 30 s deadline was armed');
+  deadlines[0]();
+  await flush();
+  assert.equal(p.calls[0].aborted, true);
+  assert.deepEqual(await heldLocks(), [], 'lock released');
+  assert.ok(p.storage.getItem(N.pending), 'possibly rotated: marker kept for the client to reconcile');
+});
+
+await test('storage cannot read the mutation marker at page start: the script does not start', async () => {
+  const p = page();
+  const getItem = p.storage.getItem;
+  p.storage.getItem = (k) => { if (k === N.mutation) throw new Error('SecurityError'); return getItem(k); };
+  runEarlyScript();
+  await flush();
+  assert.equal(p.calls.length, 0);
+  assert.equal(globalThis.__swEarlySession, undefined);
+});
+
+await test('storage cannot read the mutation marker at adoption: fail closed, the client checks itself', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  const getItem = p.storage.getItem;
+  p.storage.getItem = (k) => { if (k === N.mutation) throw new Error('SecurityError'); return getItem(k); };
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const got = auth.getUser();
+  p.calls[0].resolve(me(user));
+  await flush();
+  const own = meCalls(p.calls);
+  assert.equal(own.length, 2, 'not adopted: freshness could not be shown');
+  own[1].resolve(new Response(null, { status: 401 }));
+  assert.equal(await got, null);
+});
+
+await test('pagehide before the client takes it (page put in the back/forward cache): never adopted after restore', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  p.lifecycle('pagehide'); // frozen with the early answer unconsumed
+  p.calls[0].resolve(me(user)); // the pre-freeze answer
+  await flush();
+  // ... restored later; the client starts now.
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const got = auth.getUser();
+  await flush();
+  const own = meCalls(p.calls);
+  assert.equal(own.length, 2, 'the restored page asks /me itself');
+  own[1].resolve(new Response(null, { status: 401 }));
+  assert.equal(await got, null, 'the pre-freeze "signed in" answer was not adopted');
+});
+
+await test('freeze while the client is waiting on it: the answer that arrives after resume is discarded', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const got = auth.getUser();
+  await flush();
+  p.lifecycle('freeze');
+  p.calls[0].resolve(me(user));
+  await flush();
+  const own = meCalls(p.calls);
+  assert.equal(own.length, 2, 'checked again after resume');
+  own[1].resolve(me(bob));
+  assert.deepEqual(await got, bob);
+});
+
+await test('audit: a sign-in STARTED in another tab makes this tab re-check before it settles; the completion event re-checks again', async () => {
+  const p = page();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const first = auth.getUser();
+  await flush();
+  p.calls[0].resolve(new Response(null, { status: 401 }));
+  assert.equal(await first, null);
+  p.otherTab(N.mutation, 'other-tab:sign-in-started');
+  await flush();
+  const during = meCalls(p.calls)[1];
+  assert.ok(during, 'the start alone triggers a fresh /me');
+  during.resolve(new Response(null, { status: 401 })); // answered before the other tab's sign-in settles
+  await flush();
+  assert.equal(auth.getState().status, 'signed-out', 'the start marker alone does NOT deliver the post-change state');
+  p.otherTab('sw_auth_user', JSON.stringify(bob)); // the other tab's completion
+  await flush();
+  const after = meCalls(p.calls)[2];
+  assert.ok(after, 'its completion triggers another check');
+  after.resolve(me(bob));
+  await flush();
+  assert.deepEqual(auth.getState().user, bob, 'the post-change state arrives with the completion, not the start');
 });
 
 console.log(`\n${passed} passed, 0 failed`);

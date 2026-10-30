@@ -1,4 +1,4 @@
-import { earlySessionNames, takeEarlySession } from './early-session.js';
+import { earlySessionNames, takeEarlySession, type EarlySession } from './early-session.js';
 import { isAuthUser, mfaChallenge } from './continuation.js';
 
 /**
@@ -376,6 +376,16 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   }
   // The page's early session check (early-session.ts) is adopted at most once.
   let earlyTaken = false;
+  let earlyActive: EarlySession | null = null;
+  /** A sign-in or sign-out is starting: the early /me must not hold the
+   *  refresh lock (or be adopted). Aborting keeps its unknown-outcome marker
+   *  if it may have rotated; it is never retried. */
+  function abortEarly() {
+    if (earlyActive) { earlyActive.abort(); return; }
+    if (earlyTaken) return;
+    earlyTaken = true;
+    takeEarlySession(earlyNames)?.abort();
+  }
   function beginRefresh() {
     if (storage.getItem(refreshPendingKey)) throw new AuthError('Another refresh has an unknown outcome. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
     const marker = String(Date.now()) + ':' + Math.random();
@@ -789,6 +799,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     // Intent: from this call on, earlier checks and updates no longer apply.
     const mine = ++generation;
     markMutationStart();
+    abortEarly();
     try { storage.removeItem(refreshStampKey); } catch { /* optional cross-tab coordination */ }
     const run = enqueue(async (signal) => {
       // Before any write: a timed-out or superseded call changes nothing.
@@ -914,17 +925,34 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       };
       // The page's early check (early-session.ts) is this same first /me,
       // started during HTML parse. Adopted only for the first check of an
-      // untouched page: generation 0, nothing queued, and no session change
-      // started in any tab since it began. Otherwise it is discarded.
+      // untouched page: generation 0, nothing queued, the page not hidden or
+      // frozen since it began, and no session change started in any tab since
+      // (a marker that cannot be read counts as changed). Otherwise discarded.
+      // The wait is bounded by the request deadline; at the deadline, or when
+      // this tab starts a sign-in/sign-out, the early request is aborted. An
+      // aborted or failed possibly-rotating request leaves the unknown-outcome
+      // marker and is reconciled without rotating, never retried.
       const early = cookie && !earlyTaken && started === 0 && pendingMutations === 0 ? (earlyTaken = true, takeEarlySession(earlyNames)) : null;
       let adopted: Response | null = null;
       if (early) {
+        earlyActive = early;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         let answer: { res: Response; mayRotate: boolean } | null;
-        try { answer = await early.promise; }
-        catch (e) { if (refreshOrphaned() && started === generation) refreshUncertain = true; throw e; }
-        let mutationNow: string | null = null;
-        try { mutationNow = storage.getItem(mutationKey); } catch { /* treat as unchanged */ mutationNow = early.mutation; }
-        if (answer && started === generation && mutationNow === early.mutation) {
+        try {
+          answer = await new Promise((resolve, reject) => {
+            timer = setTimeout(() => early.abort(), mutationTimeoutMs);
+            early.promise.then(resolve, reject);
+          });
+        } catch (e) {
+          if (refreshOrphaned() && started === generation) refreshUncertain = true;
+          throw e;
+        } finally {
+          clearTimeout(timer);
+          earlyActive = null;
+        }
+        let fresh = false;
+        try { fresh = storage.getItem(mutationKey) === early.mutation; } catch { fresh = false; }
+        if (answer && !early.void && fresh && started === generation) {
           adopted = answer.res;
           if (answer.mayRotate && !adopted.ok && adopted.status !== 401 && adopted.status !== 403) refreshUncertain = true;
           const expiry = Number(adopted.headers.get('X-Sw-Access-Expires'));
@@ -1130,6 +1158,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // navigation before this queued request has even started.
       const mine = ++generation;
       markMutationStart();
+      abortEarly();
       writeSession(null);
       // Pending until /logout is answered: consumers show "signing out", not
       // "signed out", while the server may still accept the session.

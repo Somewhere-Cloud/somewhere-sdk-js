@@ -21,8 +21,18 @@
 //    mutation marker the client writes at the start of every sign-in, sign-up,
 //    MFA completion and sign-out). Anything else, including a late answer after
 //    such a change, is discarded and the client checks normally.
-//  - It is consumed once. A page restored from the back/forward cache or any
-//    later check asks /me itself.
+//  - It is BOUNDED: aborted after EARLY_SESSION_TIMEOUT_MS (the client's
+//    default request deadline), and at once when this tab starts a sign-in or
+//    sign-out. An aborted, possibly-rotating request keeps the unknown-outcome
+//    marker, exactly like the client's own interrupted /me: it is never retried;
+//    the next check reconciles without rotating. Aborting releases the lock.
+//  - It FAILS CLOSED on freshness: if the cross-tab mutation marker cannot be
+//    read, the script does not start; if the client cannot read it at adoption,
+//    the answer is not adopted.
+//  - It is VOID once the page is hidden for navigation or frozen (`pagehide`,
+//    `freeze`): a page restored from the back/forward cache never adopts an
+//    answer from before it was hidden, consumed or not. It is also consumed
+//    once; any later check asks /me itself.
 //
 // The script's names are derived from the client's DEFAULT options
 // (createSomewhereAuth() with no arguments: storage key 'sw_auth', auth path
@@ -31,6 +41,8 @@
 // created with the defaults.
 
 export const EARLY_SESSION_VERSION = 1;
+/** Matches the client's default request deadline (mutationTimeoutMs). */
+export const EARLY_SESSION_TIMEOUT_MS = 30_000;
 export const EARLY_SESSION_GLOBAL = '__swEarlySession';
 
 /** Names shared by the early script and the client, from the client's options. */
@@ -57,6 +69,10 @@ export interface EarlySession {
   mutation: string | null;
   /** null: the script stood down under the lock (the client checks normally). */
   promise: Promise<{ res: Response; mayRotate: boolean } | null>;
+  /** Abort the request (outcome unknown if it may have rotated; never retried). */
+  abort(): void;
+  /** Set on pagehide/freeze: never adopted afterwards. */
+  void?: boolean;
 }
 
 /** Take the page's early session check, once. Returns null when absent or not for these names. */
@@ -65,7 +81,7 @@ export function takeEarlySession(names: EarlySessionNames): EarlySession | null 
   const early = g[EARLY_SESSION_GLOBAL] as EarlySession | undefined;
   if (!early || typeof early !== 'object') return null;
   try { delete g[EARLY_SESSION_GLOBAL]; } catch { g[EARLY_SESSION_GLOBAL] = undefined; }
-  if (early.v !== EARLY_SESSION_VERSION || !early.promise || typeof early.promise.then !== 'function') return null;
+  if (early.v !== EARLY_SESSION_VERSION || !early.promise || typeof early.promise.then !== 'function' || typeof early.abort !== 'function') return null;
   const n = early.names || ({} as EarlySessionNames);
   const same = (Object.keys(names) as Array<keyof EarlySessionNames>).every((k) => n[k] === names[k]);
   if (!same) {
@@ -90,18 +106,24 @@ try{ls=w.localStorage;}catch(e){return;}
 if(!ls||typeof w.fetch!=='function')return;
 var g=function(k){try{return ls.getItem(k);}catch(e){return null;}};
 if(g(N.signOut)||g(N.pending))return;
-var mutation=g(N.mutation);
+var mutation;try{mutation=ls.getItem(N.mutation);}catch(e){return;}
+if(typeof w.AbortController!=='function')return;
+var ctl=new w.AbortController(),E;
+var timer=setTimeout(function(){ctl.abort();},${EARLY_SESSION_TIMEOUT_MS});
 var run=function(){
-if(g(N.signOut)||g(N.pending))return null;
+if(ctl.signal.aborted||g(N.signOut)||g(N.pending))return null;
 var stamp=Number(g(N.stamp)),mayRotate=!(stamp>Date.now()),marker=null;
 if(mayRotate){marker=String(Date.now())+':'+Math.random();try{ls.setItem(N.pending,marker);}catch(e){return null;}}
-return w.fetch(N.me,{method:'GET',credentials:'include'}).then(function(res){
+return w.fetch(N.me,{method:'GET',credentials:'include',signal:ctl.signal}).then(function(res){
 if(marker&&(res.ok||res.status===401||res.status===403)&&g(N.pending)===marker){try{ls.removeItem(N.pending);}catch(e){}}
 return {res:res,mayRotate:!!marker};
 });
 };
-var p=w.navigator&&w.navigator.locks?w.navigator.locks.request(N.stamp,run):Promise.resolve().then(run);
+var p=(w.navigator&&w.navigator.locks?w.navigator.locks.request(N.stamp,run):Promise.resolve().then(run));
+p=p.then(function(v){clearTimeout(timer);return v;},function(e){clearTimeout(timer);throw e;});
 p.catch(function(){});
-w.${EARLY_SESSION_GLOBAL}={v:${EARLY_SESSION_VERSION},names:N,mutation:mutation,promise:p};
+var stale=function(){if(E)E.void=true;};
+w.addEventListener('pagehide',stale);w.addEventListener('freeze',stale);
+E=w.${EARLY_SESSION_GLOBAL}={v:${EARLY_SESSION_VERSION},names:N,mutation:mutation,promise:p,abort:function(){ctl.abort();}};
 }catch(e){}})();`;
 }
