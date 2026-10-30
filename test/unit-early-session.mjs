@@ -42,7 +42,13 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 const meCalls = (calls) => calls.filter((c) => c.path === N.me);
 
 let passed = 0;
-const test = async (name, fn) => { await fn(); passed++; console.log('  ok   ' + name); };
+// A test that never settles is a failure with its name, not a silent exit.
+const test = async (name, fn) => {
+  let timer;
+  const hung = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('HUNG (5 s): ' + name)), 5000); });
+  try { await Promise.race([fn(), hung]); } finally { clearTimeout(timer); }
+  passed++; console.log('  ok   ' + name);
+};
 
 await test('control: without the early script the client sends its own single /me', async () => {
   const p = page();
@@ -265,12 +271,14 @@ await test('an early /me lost to the network keeps the unknown outcome; the clie
 await test('the page script holds the client\'s own refresh lock name while its /me is out', async () => {
   const p = page();
   const names = [];
-  const locks = { request(name, cb) { names.push(name); return Promise.resolve().then(cb); } };
+  let lockSignal = null;
+  const locks = { request(name, options, cb) { names.push(name); lockSignal = options?.signal; return Promise.resolve().then(cb); } };
   const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(globalThis, 'navigator', { value: { locks }, configurable: true, writable: true });
   try { runEarlyScript(); await flush(); }
   finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
   assert.deepEqual(names, [N.stamp]);
+  assert.ok(lockSignal instanceof AbortSignal, 'the lock request itself is cancellable');
   p.calls[0].resolve(me(user));
 });
 
@@ -408,6 +416,122 @@ await test('audit: a sign-in STARTED in another tab makes this tab re-check befo
   after.resolve(me(bob));
   await flush();
   assert.deepEqual(auth.getState().user, bob, 'the post-change state arrives with the completion, not the start');
+});
+
+// Another tab already holds the refresh lock and does not release it during the test.
+async function holdLock() {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let granted;
+  const got = new Promise((r) => { granted = r; });
+  void navigator.locks.request(N.stamp, () => { granted(); return held; });
+  await got;
+  return release;
+}
+// Node's lock manager keeps listing an aborted pending request in query() until the
+// holder releases, but never runs its callback; so "withdrawn" is shown by the request
+// settling at once and by nothing being sent after the holder lets go.
+const pendingLocks = async () => (await navigator.locks.query()).pending.map((l) => l.name);
+
+await test('queued behind a lock that is never released: the page timer withdraws it; nothing is ever sent', async () => {
+  const p = page();
+  const release = await holdLock();
+  const realSetTimeout = globalThis.setTimeout;
+  const deadlines = [];
+  globalThis.setTimeout = (fn, ms, ...rest) => (ms === 30_000 ? (deadlines.push(fn), 0) : realSetTimeout(fn, ms, ...rest));
+  try { runEarlyScript(); } finally { globalThis.setTimeout = realSetTimeout; }
+  const early = globalThis.__swEarlySession;
+  await flush();
+  assert.deepEqual(await pendingLocks(), [N.stamp], 'the early request is waiting for the lock');
+  deadlines[0]();
+  await assert.rejects(early.promise, (e) => e.name === 'AbortError', 'the queued request settles');
+  assert.equal(early.dispatched, false);
+  assert.equal(p.calls.length, 0, 'no /me sent');
+  assert.equal(p.storage.getItem(N.pending), null, 'no marker: nothing could have rotated');
+  release();
+  await flush();
+  assert.equal(p.calls.length, 0, 'still nothing sent after the holder lets go');
+});
+
+await test('queued behind a never-released lock, adopted by the first check: the client deadline settles it with no request and no unknown outcome', async () => {
+  const p = page();
+  const release = await holdLock();
+  runEarlyScript();
+  await flush();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage, mutationTimeoutMs: 50 });
+  const started = Date.now();
+  const got = auth.getUser();
+  await got;
+  assert.ok(Date.now() - started < 1000, 'the first check settled at its deadline');
+  assert.equal(auth.getState().status, 'indeterminate', 'a failed check, not a sign-out');
+  assert.equal(p.calls.length, 0, 'nothing sent');
+  assert.equal(p.storage.getItem(N.pending), null, 'not dispatched: no unknown-outcome marker');
+  release();
+  await flush();
+  assert.equal(p.calls.length, 0, 'and it never fires later');
+});
+
+await test('queued behind a never-released lock: a sign-out cancels the early wait at once, sends no /me, and logs out once the lock frees', async () => {
+  const p = page();
+  const release = await holdLock();
+  runEarlyScript();
+  await flush();
+  const early = globalThis.__swEarlySession;
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+  const check = auth.getUser();
+  await flush();
+  const out = auth.signOut();
+  await check; // the stale first check ends now, not at a deadline
+  await assert.rejects(early.promise, (e) => e.name === 'AbortError');
+  assert.equal(early.dispatched, false);
+  assert.equal(p.calls.length, 0, 'nothing sent while the other tab holds the lock');
+  release();
+  await flush();
+  const logout = p.calls.find((c) => c.path.endsWith('/logout'));
+  assert.ok(logout, 'logout went out once the other tab released');
+  logout.resolve(Response.json({ ok: true }));
+  await out;
+  assert.equal(auth.getState().status, 'signed-out');
+  assert.equal(meCalls(p.calls).length, 0, 'no /me was ever sent');
+});
+
+const stalledBody = (status = 200) => new Response(new ReadableStream({ start() {} }), { status, headers: { 'Content-Type': 'application/json' } });
+
+await test('headers arrive, the body stalls: the client deadline covers the body; first auth settles; the lock is free', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage, mutationTimeoutMs: 50 });
+  const got = auth.getUser();
+  p.calls[0].resolve(stalledBody());
+  const started = Date.now();
+  await got;
+  assert.ok(Date.now() - started < 1000, 'settled at the deadline despite the stalled body');
+  assert.equal(auth.getState().status, 'indeterminate');
+  assert.equal(p.calls[0].aborted, true, 'the stalled response was aborted');
+  assert.equal(p.storage.getItem(N.pending), null, 'the status already settled the rotation outcome');
+  assert.equal(meCalls(p.calls).length, 1, 'no follow-up probe needed');
+  assert.deepEqual(await heldLocks(), [], 'the lock was released at the headers');
+});
+
+await test('headers arrive, the body stalls: a sign-out ends the wait at once and logs out without waiting for a deadline', async () => {
+  const p = page();
+  runEarlyScript();
+  await flush();
+  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage, mutationTimeoutMs: 10_000 });
+  const check = auth.getUser();
+  p.calls[0].resolve(stalledBody());
+  await flush();
+  const started = Date.now();
+  const out = auth.signOut();
+  await check;
+  await flush();
+  const logout = p.calls.find((c) => c.path.endsWith('/logout'));
+  assert.ok(logout, 'logout went out immediately');
+  logout.resolve(Response.json({ ok: true }));
+  await out;
+  assert.ok(Date.now() - started < 1000, 'well before the 10 s deadline');
+  assert.equal(auth.getState().status, 'signed-out');
 });
 
 console.log(`\n${passed} passed, 0 failed`);

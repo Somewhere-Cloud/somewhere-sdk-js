@@ -377,14 +377,36 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // The page's early session check (early-session.ts) is adopted at most once.
   let earlyTaken = false;
   let earlyActive: EarlySession | null = null;
-  /** A sign-in or sign-out is starting: the early /me must not hold the
-   *  refresh lock (or be adopted). Aborting keeps its unknown-outcome marker
-   *  if it may have rotated; it is never retried. */
+  // Rejects the client's wait on the early check at once (set while waiting).
+  let earlyCancel: (() => void) | null = null;
+  /** A sign-in or sign-out is starting: the early /me must not hold or wait
+   *  for the refresh lock, or be adopted. Aborting withdraws a queued lock
+   *  request (nothing sent) or aborts a sent one (its marker, if any, stays:
+   *  outcome unknown, never retried). */
   function abortEarly() {
+    if (earlyCancel) { earlyCancel(); return; }
     if (earlyActive) { earlyActive.abort(); return; }
     if (earlyTaken) return;
     earlyTaken = true;
     takeEarlySession(earlyNames)?.abort();
+  }
+  /** Wait for `work` until the absolute deadline or a sign-in/sign-out start,
+   *  whichever is first, even if `work` itself never settles. Either way the
+   *  early request is aborted. */
+  function waitEarly<T>(early: EarlySession, work: Promise<T>, deadlineAt: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let finished = false;
+      const finish = (ok: boolean, value: unknown) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        earlyCancel = null;
+        if (ok) resolve(value as T); else reject(value);
+      };
+      const timer = setTimeout(() => { early.abort(); finish(false, timedOut()); }, Math.max(0, deadlineAt - Date.now()));
+      earlyCancel = () => { early.abort(); finish(false, superseded()); };
+      work.then((v) => finish(true, v), (e) => finish(false, e));
+    });
   }
   function beginRefresh() {
     if (storage.getItem(refreshPendingKey)) throw new AuthError('Another refresh has an unknown outcome. Sign in again.', 0, 'REFRESH_OUTCOME_UNKNOWN');
@@ -928,34 +950,40 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // untouched page: generation 0, nothing queued, the page not hidden or
       // frozen since it began, and no session change started in any tab since
       // (a marker that cannot be read counts as changed). Otherwise discarded.
-      // The wait is bounded by the request deadline; at the deadline, or when
-      // this tab starts a sign-in/sign-out, the early request is aborted. An
-      // aborted or failed possibly-rotating request leaves the unknown-outcome
-      // marker and is reconciled without rotating, never retried.
+      //
+      // Timeout coverage: ONE absolute deadline (now + mutationTimeoutMs)
+      // covers waiting for the lock, the request, the headers AND the body;
+      // a sign-in/sign-out start in this tab ends the wait at once. On either,
+      // the early request is aborted at whatever stage it is in, and the wait
+      // ends even if the early promise never settles. Outcome: not dispatched
+      // = nothing sent, no marker; dispatched with its marker still present =
+      // a possibly-rotating /me with unknown outcome, reconciled without
+      // rotating and never retried; headers already received = the marker was
+      // settled by the status, only the user body is unknown (indeterminate).
       const early = cookie && !earlyTaken && started === 0 && pendingMutations === 0 ? (earlyTaken = true, takeEarlySession(earlyNames)) : null;
       let adopted: Response | null = null;
       if (early) {
         earlyActive = early;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let answer: { res: Response; mayRotate: boolean } | null;
+        const deadlineAt = Date.now() + mutationTimeoutMs;
+        let answer: { res: Response; mayRotate: boolean } | null = null;
+        let text: string | null = null;
         try {
-          answer = await new Promise((resolve, reject) => {
-            timer = setTimeout(() => early.abort(), mutationTimeoutMs);
-            early.promise.then(resolve, reject);
-          });
+          answer = await waitEarly(early, early.promise, deadlineAt);
+          if (answer && !early.void && started === generation) text = await waitEarly(early, answer.res.text(), deadlineAt);
         } catch (e) {
-          if (refreshOrphaned() && started === generation) refreshUncertain = true;
+          if (early.dispatched && refreshOrphaned() && started === generation) refreshUncertain = true;
           throw e;
         } finally {
-          clearTimeout(timer);
           earlyActive = null;
+          early.done();
         }
         let fresh = false;
         try { fresh = storage.getItem(mutationKey) === early.mutation; } catch { fresh = false; }
-        if (answer && !early.void && fresh && started === generation) {
-          adopted = answer.res;
-          if (answer.mayRotate && !adopted.ok && adopted.status !== 401 && adopted.status !== 403) refreshUncertain = true;
-          const expiry = Number(adopted.headers.get('X-Sw-Access-Expires'));
+        if (answer && text !== null && !early.void && fresh && started === generation) {
+          const r = answer.res;
+          adopted = new Response(text, { status: r.status, statusText: r.statusText, headers: r.headers });
+          if (answer.mayRotate && !r.ok && r.status !== 401 && r.status !== 403) refreshUncertain = true;
+          const expiry = Number(r.headers.get('X-Sw-Access-Expires'));
           if (Number.isFinite(expiry) && expiry > Date.now()) accessExpiresAt = expiry;
         }
       }

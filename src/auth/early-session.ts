@@ -21,11 +21,18 @@
 //    mutation marker the client writes at the start of every sign-in, sign-up,
 //    MFA completion and sign-out). Anything else, including a late answer after
 //    such a change, is discarded and the client checks normally.
-//  - It is BOUNDED: aborted after EARLY_SESSION_TIMEOUT_MS (the client's
-//    default request deadline), and at once when this tab starts a sign-in or
-//    sign-out. An aborted, possibly-rotating request keeps the unknown-outcome
-//    marker, exactly like the client's own interrupted /me: it is never retried;
-//    the next check reconciles without rotating. Aborting releases the lock.
+//  - It is BOUNDED. One AbortController covers every stage: waiting for the
+//    refresh lock (the lock request carries the signal, so a request queued
+//    behind another tab's held lock is withdrawn without being sent), the /me
+//    request and its response body. The script aborts it EARLY_SESSION_TIMEOUT_MS
+//    after it starts unless the client reports the body consumed (done()); the
+//    client aborts it at its own deadline, and at once when this tab starts a
+//    sign-in or sign-out. `dispatched` tells the two outcomes apart: not
+//    dispatched means no request and no marker; dispatched with a marker that
+//    was not cleared means a possibly-rotating /me with an unknown outcome,
+//    exactly like the client's own interrupted /me (never retried; the next
+//    check reconciles without rotating). The lock is held only until the
+//    response headers arrive; the body is read outside it.
 //  - It FAILS CLOSED on freshness: if the cross-tab mutation marker cannot be
 //    read, the script does not start; if the client cannot read it at adoption,
 //    the answer is not adopted.
@@ -69,8 +76,12 @@ export interface EarlySession {
   mutation: string | null;
   /** null: the script stood down under the lock (the client checks normally). */
   promise: Promise<{ res: Response; mayRotate: boolean } | null>;
-  /** Abort the request (outcome unknown if it may have rotated; never retried). */
+  /** Abort it at whatever stage it is in (lock wait, request, body). */
   abort(): void;
+  /** The client has finished with the response (body consumed): stop the script's deadline. */
+  done(): void;
+  /** True once /me was actually sent (after the lock was granted). */
+  dispatched: boolean;
   /** Set on pagehide/freeze: never adopted afterwards. */
   void?: boolean;
 }
@@ -81,13 +92,18 @@ export function takeEarlySession(names: EarlySessionNames): EarlySession | null 
   const early = g[EARLY_SESSION_GLOBAL] as EarlySession | undefined;
   if (!early || typeof early !== 'object') return null;
   try { delete g[EARLY_SESSION_GLOBAL]; } catch { g[EARLY_SESSION_GLOBAL] = undefined; }
-  if (early.v !== EARLY_SESSION_VERSION || !early.promise || typeof early.promise.then !== 'function' || typeof early.abort !== 'function') return null;
+  if (early.v !== EARLY_SESSION_VERSION || !early.promise || typeof early.promise.then !== 'function'
+    || typeof early.abort !== 'function' || typeof early.done !== 'function') return null;
   const n = early.names || ({} as EarlySessionNames);
   const same = (Object.keys(names) as Array<keyof EarlySessionNames>).every((k) => n[k] === names[k]);
   if (!same) {
     // Not ours. Still let it settle before our own check so two /me requests
     // never rotate concurrently in this document.
-    return { ...early, names: n, promise: early.promise.then(() => null, () => null) };
+    // Delegates to the live object (dispatched/void keep updating).
+    return Object.create(early, {
+      names: { value: n },
+      promise: { value: early.promise.then(() => null, () => null) },
+    }) as EarlySession;
   }
   return early;
 }
@@ -108,22 +124,25 @@ var g=function(k){try{return ls.getItem(k);}catch(e){return null;}};
 if(g(N.signOut)||g(N.pending))return;
 var mutation;try{mutation=ls.getItem(N.mutation);}catch(e){return;}
 if(typeof w.AbortController!=='function')return;
-var ctl=new w.AbortController(),E;
+var ctl=new w.AbortController(),locks=w.navigator&&w.navigator.locks;
 var timer=setTimeout(function(){ctl.abort();},${EARLY_SESSION_TIMEOUT_MS});
+var E={v:${EARLY_SESSION_VERSION},names:N,mutation:mutation,dispatched:false,
+abort:function(){ctl.abort();},done:function(){clearTimeout(timer);}};
 var run=function(){
 if(ctl.signal.aborted||g(N.signOut)||g(N.pending))return null;
 var stamp=Number(g(N.stamp)),mayRotate=!(stamp>Date.now()),marker=null;
 if(mayRotate){marker=String(Date.now())+':'+Math.random();try{ls.setItem(N.pending,marker);}catch(e){return null;}}
+E.dispatched=true;
 return w.fetch(N.me,{method:'GET',credentials:'include',signal:ctl.signal}).then(function(res){
 if(marker&&(res.ok||res.status===401||res.status===403)&&g(N.pending)===marker){try{ls.removeItem(N.pending);}catch(e){}}
 return {res:res,mayRotate:!!marker};
 });
 };
-var p=(w.navigator&&w.navigator.locks?w.navigator.locks.request(N.stamp,run):Promise.resolve().then(run));
-p=p.then(function(v){clearTimeout(timer);return v;},function(e){clearTimeout(timer);throw e;});
-p.catch(function(){});
-var stale=function(){if(E)E.void=true;};
+var p=locks?locks.request(N.stamp,{signal:ctl.signal},run):Promise.resolve().then(run);
+p.then(function(v){if(!v)clearTimeout(timer);},function(){clearTimeout(timer);});
+E.promise=p;
+var stale=function(){E.void=true;};
 w.addEventListener('pagehide',stale);w.addEventListener('freeze',stale);
-E=w.${EARLY_SESSION_GLOBAL}={v:${EARLY_SESSION_VERSION},names:N,mutation:mutation,promise:p,abort:function(){ctl.abort();}};
+w.${EARLY_SESSION_GLOBAL}=E;
 }catch(e){}})();`;
 }
