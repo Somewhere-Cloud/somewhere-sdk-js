@@ -26,3 +26,22 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node scripts/test-publish-master-admission.mjs
+
+  # Real Web Locks regressions for the early session check. Node 22 (above, the
+  # supported-runtime gate) has no navigator.locks, so these cannot run there;
+  # this job declares a runtime that has them. The script fails, never skips,
+  # without Web Locks. Package engines are unchanged.
+  web-locks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:locks
