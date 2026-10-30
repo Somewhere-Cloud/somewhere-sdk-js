@@ -6,6 +6,28 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.13.2
+
+### Added
+
+- `@somewhere-cloud/sdk/early-session`: a small script a host can place in a
+  page's `<head>` so the cookie-session client's first `GET /api/auth/me` starts
+  while the page is still loading, instead of after the app bundle has run. The
+  client adopts that answer for its first check only; it is still one `/me`,
+  answered by the app's own handler. It applies only to a client created with
+  the default options (`createSomewhereAuth()` with no arguments), and only when
+  the page includes the script; without it, no early request is made.
+- Sign-in, sign-up, MFA completion and sign-out now mark their start for other
+  open tabs of the same app (cookie sessions), with or without the early-session
+  script. A tab discards an in-flight answer when it observes another tab
+  starting a session change, then checks again.
+
+### Notes
+
+- Existing apps must adopt this SDK and include the early-session script to use
+  this optimization; installing this package alone does not modify deployed
+  pages.
+
 ## 0.13.1
 
 ### Fixed
