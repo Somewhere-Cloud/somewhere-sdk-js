@@ -6,6 +6,19 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.13.1
+
+### Fixed
+
+- Sign-out now survives a reload. `signOut()` records a sign-out intent in the
+  browser (no credentials stored) before contacting the server, and a page that
+  loads while that intent is pending finishes the sign-out instead of showing the
+  previous user as signed in. A successful sign-in clears the intent.
+- The cookie logout and refresh requests no longer use `keepalive`, so a response
+  from a page that is being left cannot overwrite a newer sign-in. Header-token
+  requests are unchanged.
+- No app code changes are needed.
+
 ## 0.13.0
 
 ### Changed
