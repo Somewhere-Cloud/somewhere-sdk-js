@@ -453,18 +453,19 @@ for (const [label, respond, status] of [['500', () => json(500, {}), 500], ['net
   await auth.signOut();
   check('header: the retry sends the original session token', sent.join() === 'Bearer accA,Bearer accA' && auth.getState().signOutUnconfirmed === false, sent);
 }
-for (const [label, respond, expect] of [
-  ['/me 401', () => json(401, {}), { status: 'signed-out', owed: false }],
-  ['/me with a user', () => json(200, { user: A }), { status: 'authenticated', owed: false }],
-  ['/me 503', () => json(503, {}), { status: 'indeterminate', owed: true }],
+for (const [label, respond] of [
+  ['/me 401', () => json(401, {})],
+  ['/me with a user', () => json(200, { user: A })],
+  ['/me 503', () => json(503, {})],
 ]) {
   browser({ cachedUser: A });
-  server({ '/api/auth/logout': () => json(500, {}), '/api/auth/me': respond });
+  const calls = server({ '/api/auth/logout': () => json(500, {}), '/api/auth/me': respond });
   const auth = createSomewhereAuth();
   await auth.signOut();
   await auth.getUser();
   const s = auth.getState();
-  check(`cookie: after a failed sign-out, ${label} → ${expect.status}, owed=${expect.owed}`, s.status === expect.status && s.signOutUnconfirmed === expect.owed, s);
+  check(`cookie: failed sign-out intent survives checks (${label})`, s.status === 'signed-out' && s.signOutUnconfirmed && s.error?.code === 'SIGN_OUT_UNCONFIRMED', s);
+  check('check retries logout rather than restoring cookies through /me', calls.every(c => c.path === '/api/auth/logout') && calls.length === 2, calls);
 }
 {
   browser({ cachedUser: A });
@@ -590,8 +591,8 @@ for (const [label, respond, expect] of [
   await tick(); await tick();
   check('…still pending before the server answers', auth.getState().signingOut === true);
   const logoutCall = calls.find((call) => call.path === '/api/auth/logout');
-  check('…logout survives navigation while retaining its deadline and cookies',
-    logoutCall?.init.keepalive === true && logoutCall.init.signal instanceof AbortSignal
+  check('…cookie logout is cancellable on navigation and retains deadline/cookies',
+    logoutCall?.init.keepalive === false && logoutCall.init.signal instanceof AbortSignal
       && logoutCall.init.credentials === 'include');
   logout.resolve(json(200, { ok: true }));
   await done;
@@ -644,6 +645,58 @@ for (const [label, respond, opts] of [
   await out; await signIn;
   const s = auth.getState();
   check('sign-in after a pending sign-out: authenticated, not pending', s.status === 'authenticated' && s.user?.id === 'usr_b' && s.signingOut === false, s);
+}
+
+// Durable cookie logout intent: fresh clients, stale bootstrap and offline.
+{
+  const tab = browser({ cachedUser: A });
+  const me = deferred();
+  const calls = server({ '/api/auth/me': () => me.promise, '/api/auth/logout': () => json(200, {}) });
+  const old = createSomewhereAuth();
+  const bootstrap = old.getUser();
+  await tick();
+  const newer = createSomewhereAuth();
+  await newer.signOut();
+  me.resolve(json(200, { user: A }));
+  await bootstrap;
+  check('other client logout fences a late bootstrap identity write', old.getState().status !== 'authenticated');
+  const reloaded = createSomewhereAuth();
+  check('confirmed intent initializes signed-out without cached user', reloaded.getState().status === 'signed-out' && reloaded.getCachedUser() === null);
+  await reloaded.getUser();
+  check('confirmed intent does not bootstrap or refresh old cookies', calls.filter(c => c.path === '/api/auth/me').length === 1);
+  check('intent record contains no credentials', !tab.values.get('sw_auth_user:sign-out:/api/auth').includes(A.email));
+}
+{
+  browser({ cachedUser: A });
+  const calls = server({ '/api/auth/logout': () => { throw new TypeError('offline'); }, '/public': () => json(200, {}) });
+  await createSomewhereAuth().signOut();
+  const restored = createSomewhereAuth();
+  await restored.getUser();
+  check('offline reload remains signed-out and unconfirmed', restored.getState().status === 'signed-out' && restored.getState().signOutUnconfirmed && restored.getState().error?.code === 'SIGN_OUT_UNCONFIRMED');
+  await restored.fetch('/public', { credentials: 'include', headers: { Authorization: 'Bearer stale', 'X-Refresh-Token': 'stale' } });
+  const sent = calls.at(-1).init;
+  check('signed-out public fetch cannot reuse surviving cookies/header credentials', sent.credentials === 'omit' && !new Headers(sent.headers).has('Authorization') && !new Headers(sent.headers).has('X-Refresh-Token'));
+  server({ '/api/auth/login': () => json(200, { cookie_session: true, user: { invalid: true } }) });
+  await settled(restored.signIn({ email: B.email, password: 'pw' }));
+  check('malformed sign-in cannot clear pending logout', restored.getState().signOutUnconfirmed && createSomewhereAuth().getState().status === 'signed-out');
+}
+
+{
+  browser({ cachedUser: A });
+  server({ '/api/auth/logout': () => json(200, {}), '/other/auth/me': () => json(200, { user: B }) });
+  await createSomewhereAuth().signOut();
+  const separate = createSomewhereAuth({ authPath: '/other/auth' });
+  await separate.getUser();
+  check('logout intent is scoped to the configured auth endpoint', separate.getState().status === 'authenticated' && separate.getCachedUser()?.id === B.id);
+}
+{
+  browser();
+  const blocked = { getItem: () => null, setItem: () => { throw new Error('storage blocked'); }, removeItem: () => { throw new Error('storage blocked'); } };
+  server({ '/api/auth/logout': () => { throw new TypeError('offline'); }, '/api/auth/me': () => json(200, { user: A }) });
+  const auth = createSomewhereAuth({ storage: blocked });
+  await auth.signOut();
+  await auth.getUser();
+  check('unavailable persistence retains in-memory sign-out without claiming confirmation', auth.getState().status === 'signed-out' && auth.getState().signOutUnconfirmed);
 }
 
 console.log(failed ? `\n${failed} failed` : '\nall passed');
