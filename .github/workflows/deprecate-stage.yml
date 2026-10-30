@@ -1,0 +1,65 @@
+# Deprecate exactly @somewhere-cloud/sdk@0.0.0-stage (founder-authorized, tsk_2233b180).
+# One package, one exact version, one fixed message: no inputs, no range, no
+# unpublish, no publish, no other version touched. Uses the existing Actions
+# secret NPM_CLOUD_BOOTSTRAP_TOKEN; npm deprecate needs a token with write access
+# to the package (trusted publishing/OIDC covers npm publish only, so it is not
+# requested here). The token is checked with a non-mutating `npm whoami` first;
+# if that fails, nothing is attempted. Readback proves the exact version carries
+# the message and every other version and the latest tag are unchanged.
+name: Deprecate staging version
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deprecate:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      PACKAGE: '@somewhere-cloud/sdk'
+      VERSION: '0.0.0-stage'
+      MESSAGE: 'This staging version is deprecated. Install the stable @somewhere-cloud/sdk release instead.'
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm install -g npm@11.19.0
+      - name: Preflight (no change)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_CLOUD_BOOTSTRAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_CLOUD_BOOTSTRAP_TOKEN is not set; nothing attempted." >&2; exit 1; fi
+          npm whoami > /dev/null || { echo "The token is not accepted by the registry (npm whoami failed); nothing attempted." >&2; exit 1; }
+          echo "token accepted by the registry"
+          test "$(npm view "$PACKAGE@$VERSION" version)" = "$VERSION"
+          npm view "$PACKAGE" versions --json > versions.json
+          npm view "$PACKAGE" dist-tags.latest > latest-before.txt
+          echo "latest before: $(cat latest-before.txt)"
+          echo "deprecated before: $(npm view "$PACKAGE@$VERSION" deprecated || true)"
+      - name: Deprecate exactly one version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_CLOUD_BOOTSTRAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(npm view "$PACKAGE@$VERSION" deprecated || true)" = "$MESSAGE" ]; then echo "already deprecated with this message; nothing sent"; exit 0; fi
+          npm deprecate "$PACKAGE@$VERSION" "$MESSAGE"
+      - name: Readback
+        run: |
+          set -euo pipefail
+          test "$(npm view "$PACKAGE@$VERSION" deprecated)" = "$MESSAGE"
+          echo "$PACKAGE@$VERSION deprecated with the exact message"
+          for v in $(node -e "for (const v of JSON.parse(require('fs').readFileSync('versions.json','utf8'))) if (v !== process.env.VERSION) console.log(v)"); do
+            d="$(npm view "$PACKAGE@$v" deprecated || true)"
+            if [ -n "$d" ]; then echo "UNEXPECTED: $PACKAGE@$v is deprecated: $d" >&2; exit 1; fi
+            echo "$PACKAGE@$v not deprecated"
+          done
+          test "$(npm view "$PACKAGE" dist-tags.latest)" = "$(cat latest-before.txt)"
+          echo "latest unchanged: $(cat latest-before.txt)"
