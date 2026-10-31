@@ -247,6 +247,14 @@ try {
     assertOnlyAllowedKeys();
   });
 
+  await test('a legacy 0.13.x refresh-pending key is removed when the client is created', async () => {
+    const s = storage();
+    s.setItem('sw_auth_user:refresh-pending', 'from-0.13.3:0.5');
+    written.delete('sw_auth_user:refresh-pending');
+    createSomewhereAuth({ mode: 'cookie', storage: s, baseUrl: BASE });
+    assert.equal(s.getItem('sw_auth_user:refresh-pending'), null);
+  });
+
   await test('a pending sign-out writes only the intent key; nothing else', async () => {
     const s = storage(); const p = platform(); globalThis.fetch = p.fetch;
     const auth = createSomewhereAuth({ mode: 'cookie', storage: s, baseUrl: BASE });

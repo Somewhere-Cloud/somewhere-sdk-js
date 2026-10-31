@@ -376,6 +376,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // refresh is due, and other tabs skip theirs until then. Not a lock: two tabs
   // refreshing together is harmless (the server accepts a concurrent refresh).
   const refreshStampKey = userKey + ':refresh-at';
+  // 0.13.x wrote an "unknown refresh outcome" marker here; nothing reads it now.
+  try { storage.removeItem(userKey + ':refresh-pending'); } catch { /* storage unavailable */ }
   const earlyNames = earlySessionNames(key, baseUrl, authPath);
   // The page's early session check (early-session.ts) is adopted at most once.
   let earlyTaken = false;
