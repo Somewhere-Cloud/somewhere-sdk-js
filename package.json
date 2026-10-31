@@ -1,6 +1,6 @@
 {
   "name": "@somewhere-cloud/sdk",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "Official JavaScript/TypeScript SDK for the somewhere.cloud platform API.",
   "keywords": [
     "somewhere",
