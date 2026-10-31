@@ -5,8 +5,9 @@
 // real Web Locks). The real-lock regressions live in unit-early-session-locks.mjs.
 //  - adopted: one /me in total, signed-in and signed-out alike;
 //  - stands down (no request) on a recorded sign-out or an unknown refresh outcome;
-//  - discarded, never written, after a sign-in/sign-out started in this tab, or one
-//    STARTED in another tab (cross-tab mutation marker), including a late answer;
+//  - discarded, never written, after a sign-in/sign-out started in this tab, or a
+//    sign-out started / sign-in completed in another tab, including a late answer;
+//  - another tab merely STARTING (or failing) a sign-in costs this tab nothing;
 //  - not adopted by a client with other names, which waits for it before its own /me;
 //  - consumed once; the unknown-outcome marker protocol is the client's own.
 import assert from 'node:assert/strict';
@@ -99,9 +100,7 @@ await test('a sign-out in THIS tab while the early /me is in flight: its late an
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const check = auth.getUser();
   await flush();
-  const markBefore = p.storage.getItem(N.mutation);
   const out = auth.signOut();
-  assert.notEqual(p.storage.getItem(N.mutation), markBefore, 'mutation marker written at sign-out START (before /logout answers)');
   await flush();
   p.calls[0].resolve(me(user)); // the pre-sign-out answer arrives late
   await check.catch(() => undefined);
@@ -125,69 +124,30 @@ await test('a sign-in started in THIS tab before the first check: the early answ
   await flush();
   const login = p.calls.find((c) => c.path.endsWith('/login'));
   assert.ok(login, 'the sign-in went out');
-  assert.ok(p.storage.getItem(N.mutation), 'mutation marker written at sign-in START');
   login.resolve(Response.json({ user: bob, cookie_session: true }));
   await signIn;
   assert.deepEqual(auth.getState().user, bob);
   assert.equal(auth.getState().status, 'authenticated', 'the early 401 did not sign the new session out');
 });
 
-await test('storage refuses the mutation marker: this tab\'s own sign-in still blocks adoption (generation)', async () => {
-  const p = page();
-  runEarlyScript();
-  await flush();
-  const setItem = p.storage.setItem;
-  p.storage.setItem = (k, v) => { if (k === N.mutation) throw new Error('quota'); return setItem(k, v); };
-  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
-  const signIn = auth.signIn({ email: bob.email, password: 'x' });
-  const check = auth.getUser(); // queued behind the sign-in, generation 1
-  await flush();
-  p.calls[0].resolve(new Response(null, { status: 401 })); // the early answer predates the sign-in
-  await flush();
-  p.calls.find((c) => c.path.endsWith('/login')).resolve(Response.json({ user: bob, cookie_session: true }));
-  await signIn;
-  await flush();
-  const own = meCalls(p.calls).slice(1);
-  for (const c of own) c.resolve(me(bob));
-  await check;
-  assert.deepEqual(auth.getState().user, bob);
-  assert.equal(auth.getState().status, 'authenticated', 'the stale early 401 was not adopted after this tab signed in');
-});
 
-await test('a session change STARTED in another tab while the early /me was out: discarded, checked again', async () => {
+await test('another tab STARTS a sign-out while the early /me is out: this tab is signed out at once; the late answer is discarded', async () => {
   const p = page();
   runEarlyScript();
   await flush();
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const first = auth.getUser();
   await flush();
-  p.otherTab(N.mutation, 'other-tab:sign-out-started'); // start, not completion
+  p.otherTab(N.signOut, 'pending:1:0.5'); // the other tab's sign-out intent, written at its start
   await flush();
-  assert.equal(auth.getState().status, 'checking', 'nothing in flight may settle the state now');
-  p.calls[0].resolve(me(user)); // the early answer, from before the other tab's change
+  assert.equal(auth.getState().status, 'signed-out');
+  p.calls[0].resolve(me(user)); // the early answer, from before the other tab's sign-out
   await first;
   await flush();
-  const again = meCalls(p.calls);
-  assert.equal(again.length, 2, 'the client asked again');
-  again[1].resolve(new Response(null, { status: 401 }));
-  await flush();
   assert.equal(auth.getState().status, 'signed-out', 'the late early "signed in" answer was not adopted');
+  assert.equal(auth.getState().user, null);
 });
 
-await test('a cross-tab start the event has not reached yet: the marker comparison alone discards the answer', async () => {
-  const p = page();
-  runEarlyScript();
-  await flush();
-  p.storage.setItem(N.mutation, 'other-tab:sign-in-started'); // no storage event delivered yet
-  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
-  const got = auth.getUser();
-  p.calls[0].resolve(new Response(null, { status: 401 }));
-  await flush();
-  const own = meCalls(p.calls);
-  assert.equal(own.length, 2, 'not adopted: the client sent its own /me');
-  own[1].resolve(me(bob));
-  assert.deepEqual(await got, bob);
-});
 
 await test('a client with other names never adopts it, and waits for it before its own /me', async () => {
   const p = page();
@@ -250,7 +210,7 @@ await test('the page script holds the client\'s own refresh lock name while its 
   p.calls[0].resolve(me(user));
 });
 
-await test('a never-settling early /me a never-settling early /me: a sign-out aborts it and completes', async () => {
+await test('a never-settling early /me: a sign-out aborts it and completes', async () => {
   const p = page();
   runEarlyScript();
   await flush();
@@ -297,31 +257,7 @@ await test('with no client at all, the script\'s own deadline aborts the request
   assert.ok(p.storage.getItem(N.pending), 'possibly rotated: marker kept for the client to reconcile');
 });
 
-await test('storage cannot read the mutation marker at page start: the script does not start', async () => {
-  const p = page();
-  const getItem = p.storage.getItem;
-  p.storage.getItem = (k) => { if (k === N.mutation) throw new Error('SecurityError'); return getItem(k); };
-  runEarlyScript();
-  await flush();
-  assert.equal(p.calls.length, 0);
-  assert.equal(globalThis.__swEarlySession, undefined);
-});
 
-await test('storage cannot read the mutation marker at adoption: fail closed, the client checks itself', async () => {
-  const p = page();
-  runEarlyScript();
-  await flush();
-  const getItem = p.storage.getItem;
-  p.storage.getItem = (k) => { if (k === N.mutation) throw new Error('SecurityError'); return getItem(k); };
-  const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
-  const got = auth.getUser();
-  p.calls[0].resolve(me(user));
-  await flush();
-  const own = meCalls(p.calls);
-  assert.equal(own.length, 2, 'not adopted: freshness could not be shown');
-  own[1].resolve(new Response(null, { status: 401 }));
-  assert.equal(await got, null);
-});
 
 await test('pagehide before the client takes it (page put in the back/forward cache): never adopted after restore', async () => {
   const p = page();
@@ -356,27 +292,28 @@ await test('freeze while the client is waiting on it: the answer that arrives af
   assert.deepEqual(await got, bob);
 });
 
-await test('audit: a sign-in STARTED in another tab makes this tab re-check before it settles; the completion event re-checks again', async () => {
+await test('another tab STARTS a sign-in (even one that fails): this tab sends no /me; its COMPLETION re-checks', async () => {
   const p = page();
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const first = auth.getUser();
   await flush();
   p.calls[0].resolve(new Response(null, { status: 401 }));
   assert.equal(await first, null);
-  p.otherTab(N.mutation, 'other-tab:sign-in-started');
+  // A real other tab reaches this one only through storage events. Starting a
+  // sign-in there clears the shared refresh stamp; failing it writes nothing else
+  // (an unchanged user is not rewritten). 0.13.2 also wrote a mutation marker here.
+  p.otherTab('sw_auth_user:refresh-at', '');
+  p.otherTab('sw_auth_user:mutation', 'from-a-0.13.2-tab');
   await flush();
-  const during = meCalls(p.calls)[1];
-  assert.ok(during, 'the start alone triggers a fresh /me');
-  during.resolve(new Response(null, { status: 401 })); // answered before the other tab's sign-in settles
+  assert.equal(meCalls(p.calls).length, 1, 'a started or failed sign-in elsewhere costs this tab nothing');
+  assert.equal(auth.getState().status, 'signed-out');
+  p.otherTab('sw_auth_user', JSON.stringify(bob)); // a sign-in completing in the other tab
   await flush();
-  assert.equal(auth.getState().status, 'signed-out', 'the start marker alone does NOT deliver the post-change state');
-  p.otherTab('sw_auth_user', JSON.stringify(bob)); // the other tab's completion
-  await flush();
-  const after = meCalls(p.calls)[2];
-  assert.ok(after, 'its completion triggers another check');
+  const after = meCalls(p.calls)[1];
+  assert.ok(after, 'the completion triggers one check');
   after.resolve(me(bob));
   await flush();
-  assert.deepEqual(auth.getState().user, bob, 'the post-change state arrives with the completion, not the start');
+  assert.deepEqual(auth.getState().user, bob, 'the new user arrives with the completion');
 });
 
 await test('headers arrive, the body stalls: the client deadline covers the body; first auth settles', async () => {

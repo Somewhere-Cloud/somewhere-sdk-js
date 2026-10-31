@@ -647,24 +647,40 @@ for (const [label, respond, opts] of [
   check('sign-in after a pending sign-out: authenticated, not pending', s.status === 'authenticated' && s.user?.id === 'usr_b' && s.signingOut === false, s);
 }
 
-// Durable cookie logout intent: fresh clients, stale bootstrap and offline.
+// Cookie logout: the server's answer is the truth once /logout is confirmed.
+// Bounded UI staleness is allowed (a /me answered before the logout may still
+// show the old user in a client that did not sign out); credentials are not
+// resurrected: the next server check answers 401.
 {
   const tab = browser({ cachedUser: A });
   const me = deferred();
-  const calls = server({ '/api/auth/me': () => me.promise, '/api/auth/logout': () => json(200, {}) });
+  let sessionEnded = false;
+  const intentWrites = [];
+  const realSet = globalThis.localStorage.setItem;
+  globalThis.localStorage.setItem = (k, v) => { if (k === 'sw_auth_user:sign-out:/api/auth') intentWrites.push(v); return realSet(k, v); };
+  const calls = server({
+    '/api/auth/me': () => (sessionEnded ? json(401, {}) : me.promise),
+    '/api/auth/logout': () => { sessionEnded = true; return json(200, {}); },
+  });
   const old = createSomewhereAuth();
   const bootstrap = old.getUser();
   await tick();
   const newer = createSomewhereAuth();
-  await newer.signOut();
-  me.resolve(json(200, { user: A }));
+  const out = newer.signOut();
+  me.resolve(json(200, { user: A })); // answered by the server BEFORE the logout
   await bootstrap;
-  check('other client logout fences a late bootstrap identity write', old.getState().status !== 'authenticated');
+  await out;
+  check('confirmed logout leaves no intent record', !tab.values.has('sw_auth_user:sign-out:/api/auth'));
+  check('the pending record written meanwhile carried no credentials', intentWrites.length === 1 && intentWrites[0].startsWith('pending:') && !intentWrites[0].includes(A.email));
+  await old.getUser();
+  check('a client holding a pre-logout answer is signed out by its next server check (401)', old.getState().status === 'signed-out' && old.getState().user === null, old.getState());
   const reloaded = createSomewhereAuth();
-  check('confirmed intent initializes signed-out without cached user', reloaded.getState().status === 'signed-out' && reloaded.getCachedUser() === null);
+  check('a reload after confirmed logout asks the server instead of answering locally', reloaded.getState().status === 'checking' && reloaded.getCachedUser() === null);
+  const before = calls.filter((c) => c.path === '/api/auth/me').length;
   await reloaded.getUser();
-  check('confirmed intent does not bootstrap or refresh old cookies', calls.filter(c => c.path === '/api/auth/me').length === 1);
-  check('intent record contains no credentials', !tab.values.get('sw_auth_user:sign-out:/api/auth').includes(A.email));
+  check('…one /me, answered 401 by the server; no refresh', reloaded.getState().status === 'signed-out'
+    && calls.filter((c) => c.path === '/api/auth/me').length === before + 1 && calls.every((c) => c.path !== '/api/auth/refresh'));
+  globalThis.localStorage.setItem = realSet;
 }
 {
   browser({ cachedUser: A });
