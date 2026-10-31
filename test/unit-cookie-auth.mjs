@@ -271,6 +271,9 @@ async function main() {
       'runCookieAction',
       'cookieModeNeedsBackend',
       'runAuthFlow',
+      'signedInMfa',
+      'runMfaCall',
+      'runCookieMfa',
       'sessionMutation',
       'performSignOut',
     ]);
@@ -288,6 +291,10 @@ async function main() {
       ['verifyMagicLink', 'adapter:POST /api/auth/magic-link/verify'],
       ['signInWithOAuth', 'platform-redirect'],
       ['completeMfa', 'adapter:POST /api/auth/mfa/challenge'],
+      ['resendMfaCode', 'adapter:POST /api/auth/mfa/challenge'],
+      ['enrollMfa', 'adapter:POST /api/auth/mfa/enroll'],
+      ['verifyMfaEnrollment', 'adapter:POST /api/auth/mfa/verify'],
+      ['unenrollMfa', 'adapter:POST /api/auth/mfa/unenroll'],
       ['signOut', 'adapter:POST /api/auth/logout'],
       ['getSession', 'local'],
       ['getUser', 'adapter:GET /api/auth/me'],
@@ -312,6 +319,9 @@ async function main() {
       ['sendMagicLink', (auth) => auth.sendMagicLink({ email: USER.email }), 'POST', '/api/auth/magic-link'],
       ['verifyMagicLink', (auth) => auth.verifyMagicLink({ token: 'magic' }), 'POST', '/api/auth/magic-link/verify'],
       ['getUser', (auth) => auth.getUser(), 'GET', '/api/auth/me'],
+      ['enrollMfa', (auth) => auth.enrollMfa(), 'POST', '/api/auth/mfa/enroll'],
+      ['verifyMfaEnrollment', (auth) => auth.verifyMfaEnrollment({ challenge_id: 'enroll:s:1', code: '111111' }), 'POST', '/api/auth/mfa/verify'],
+      ['unenrollMfa', (auth) => auth.unenrollMfa({ password: 'pw' }), 'POST', '/api/auth/mfa/unenroll'],
     ];
     for (const [name, invoke, method, path] of adapterCases) {
       const current = cookieClient((url) =>

@@ -475,35 +475,31 @@ interface SomewhereRuntimeAuthModeration {
     user: { id: string; email: string; role: SomewhereAuthRole };
   }>;
 }
-// Replaces the inline mfa type in SomewhereRuntimeAuth (challenge/challengeWithCookie unchanged).
+// Email sign-in codes (tsk_8fe91eb5). Authenticator-app activation (reauthenticate*) answers 501 AUTH_FEATURE_UNAVAILABLE.
+type SomewhereMfaDelivery = 'sent' | 'pending' | 'unknown';
+interface SomewhereMfaCodeSent { challenge_id: string; delivery: SomewhereMfaDelivery; expires_in: number }
+type SomewhereMfaRecovery =
+  | { removal_pending: true; removes_at: string; wait_seconds: number; notice_resent?: boolean }
+  | { enrolled: false };
 interface SomewhereRuntimeAuthMfa {
   challenge(options: { mfa_token: string; code: string }): Promise<SomewhereAuthSession>;
   challengeWithCookie(options: { mfa_token: string; code: string }): Promise<{ user: SomewhereAuthUser }>;
-  enroll(options: { token: string }): Promise<{
-    secret: string; enrollment_id: string; otpauth_uri: string; issuer: string; account: string;
-  }>;
-  reauthenticate(options: { token: string; enrollment_id: string; method: 'password'; password: string }):
-    Promise<{ method: 'password'; activation_token: string; expires_in_seconds: number }>;
-  reauthenticate(options: { token: string; enrollment_id: string; method: 'email' }):
-    Promise<{ method: 'email'; challenge_id: string; expires_in_seconds: number; pending?: true }>;
-  verifyReauthentication(options: { token: string; enrollment_id: string; challenge_id: string; code: string }):
-    Promise<{ method: 'email'; activation_token: string; expires_in_seconds: number }>;
-  verify(options: { token: string; enrollment_id: string; activation_token: string; code: string }):
-    Promise<{ enabled: true; backup_codes: string[] }>;
-  unenroll(options: { token: string; code: string }): Promise<{ enabled: false }>;
-  // The same steps for the request's own session (cookie or Bearer). verifyWithCookie ends every session and clears the cookies.
-  enrollWithCookie(req: Request): Promise<{
-    secret: string; enrollment_id: string; otpauth_uri: string; issuer: string; account: string;
-  }>;
-  reauthenticateWithCookie(req: Request, options: { enrollment_id: string; method: 'password'; password: string }):
-    Promise<{ method: 'password'; activation_token: string; expires_in_seconds: number }>;
-  reauthenticateWithCookie(req: Request, options: { enrollment_id: string; method: 'email' }):
-    Promise<{ method: 'email'; challenge_id: string; expires_in_seconds: number; pending?: true }>;
-  verifyReauthenticationWithCookie(req: Request, options: { enrollment_id: string; challenge_id: string; code: string }):
-    Promise<{ method: 'email'; activation_token: string; expires_in_seconds: number }>;
-  verifyWithCookie(req: Request, options: { enrollment_id: string; activation_token: string; code: string }):
-    Promise<{ enabled: true; backup_codes: string[] }>;
-  unenrollWithCookie(req: Request, options: { code: string }): Promise<{ enabled: false }>;
+  resend(options: { mfa_token: string }): Promise<{ sent: boolean; delivery: SomewhereMfaDelivery; expires_in: number }>;
+  enroll(options: { token: string }): Promise<SomewhereMfaCodeSent | { enrolled: true; method: 'email' }>;
+  verify(options: { token: string; challenge_id: string; code: string }): Promise<{ enrolled: true; method: 'email' }>;
+  unenroll(options: { token: string; password: string }): Promise<SomewhereMfaCodeSent | { enrolled: false }>;
+  unenroll(options: { token: string; challenge_id: string; code: string }): Promise<{ enrolled: false }>;
+  recover(options: { email: string; password: string }): Promise<SomewhereMfaRecovery>;
+  cancelRecovery(options: { token: string }): Promise<{ outcome: 'cancelled' | 'already_closed' | 'completed'; message: string }>;
+  reauthenticate(options: { token: string; enrollment_id: string; method: 'password' | 'email'; password?: string }): Promise<never>;
+  verifyReauthentication(options: { token: string; enrollment_id: string; challenge_id: string; code: string }): Promise<never>;
+  // The same steps for the request's own session (cookie or Bearer). Turning codes on or off ends no session.
+  enrollWithCookie(req: Request): Promise<SomewhereMfaCodeSent | { enrolled: true; method: 'email' }>;
+  verifyWithCookie(req: Request, options: { challenge_id: string; code: string }): Promise<{ enrolled: true; method: 'email' }>;
+  unenrollWithCookie(req: Request, options: { password: string }): Promise<SomewhereMfaCodeSent | { enrolled: false }>;
+  unenrollWithCookie(req: Request, options: { challenge_id: string; code: string }): Promise<{ enrolled: false }>;
+  reauthenticateWithCookie(req: Request, options: { enrollment_id: string; method: 'password' | 'email'; password?: string }): Promise<never>;
+  verifyReauthenticationWithCookie(req: Request, options: { enrollment_id: string; challenge_id: string; code: string }): Promise<never>;
 }
 interface SomewhereRuntimeAuth {
   signup(options: SomewhereAuthSignupOptions): Promise<SomewhereAuthIssuedSession>;
