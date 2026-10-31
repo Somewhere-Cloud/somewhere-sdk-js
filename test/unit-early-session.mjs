@@ -1,23 +1,20 @@
 // Early session check (platform tsk_c09746b9): the page starts the client's
 // first GET /api/auth/me during HTML parse and the client adopts that answer.
-// Proves, both directions, with the REAL inline script source, the built client and
-// whatever lock support the runtime has (Node 22: none, so the no-lock path; Node 24+:
-// real Web Locks). The real-lock regressions live in unit-early-session-locks.mjs.
+// Proves, both directions, with the REAL inline script source and the built client:
 //  - adopted: one /me in total, signed-in and signed-out alike;
-//  - stands down (no request) on a recorded sign-out or an unknown refresh outcome;
+//  - stands down (no request) only on a recorded sign-out; it takes no Web Lock and
+//    writes no storage (audit S2: no refresh-pending marker, no cross-tab lock);
+//  - an early /me cut by navigation is a failed request: the next page boots normally;
 //  - discarded, never written, after a sign-in/sign-out started in this tab, or a
 //    sign-out started / sign-in completed in another tab, including a late answer;
 //  - another tab merely STARTING (or failing) a sign-in costs this tab nothing;
 //  - not adopted by a client with other names, which waits for it before its own /me;
-//  - consumed once; the unknown-outcome marker protocol is the client's own.
+//  - consumed once; void after pagehide/freeze; bounded by one deadline.
 import assert from 'node:assert/strict';
 import { createSomewhereAuth } from '../dist/esm/auth/client.js';
 import { N, user, bob, page, me, runEarlyScript, flush, meCalls, suite, stalledBody } from './early-session-harness.mjs';
 
 const { test, done } = suite();
-console.log(typeof globalThis.navigator?.locks?.request === 'function'
-  ? '  (runtime has Web Locks: early script and client use them)'
-  : '  (runtime has NO Web Locks: no-lock path; lock regressions are NOT run here, see unit-early-session-locks.mjs)');
 
 await test('control: without the early script the client sends its own single /me', async () => {
   const p = page();
@@ -29,20 +26,21 @@ await test('control: without the early script the client sends its own single /m
   assert.deepEqual(await got, user);
 });
 
-await test('signed in: the early /me is adopted; one request in total; marker cleared', async () => {
+await test('signed in: the early /me is adopted; one request in total; the script writes nothing', async () => {
   const p = page();
   runEarlyScript();
   await flush();
   assert.equal(meCalls(p.calls).length, 1, 'started by the page, before the client exists');
   assert.equal(p.calls[0].init.credentials, 'include');
-  assert.ok(p.storage.getItem(N.pending), 'same unknown-outcome marker as the client before a possibly-rotating /me');
+  assert.equal(p.calls[0].headers.get('X-No-Auto-Refresh'), null, 'a normal /me: it may rotate in-band');
+  assert.equal(p.storage.map.size, 0, 'no marker, no stamp');
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const got = auth.getUser();
   p.calls[0].resolve(me(user));
   assert.deepEqual(await got, user);
   assert.equal(auth.getState().status, 'authenticated');
   assert.equal(meCalls(p.calls).length, 1, 'the client sent no /me of its own');
-  assert.equal(p.storage.getItem(N.pending), null, 'definitive answer clears the marker');
+  assert.deepEqual([...p.storage.map.keys()], ['sw_auth_user'], 'only the cached user');
 });
 
 await test('signed out: an early 401 is adopted as signed-out; one request', async () => {
@@ -68,29 +66,63 @@ await test('a recorded sign-out (owed or done): the page sends nothing; the clie
   }
 });
 
-await test('an unknown refresh outcome: the page sends nothing; the client reconciles without rotating', async () => {
+await test('a leftover 0.13.x refresh-pending marker or a refresh stamp changes nothing: the early /me is sent and adopted', async () => {
   const p = page();
-  p.storage.setItem(N.pending, 'earlier:marker');
+  p.storage.setItem('sw_auth_user:refresh-pending', 'from-0.13.3:0.5');
+  p.storage.setItem('sw_auth_user:refresh-at', String(Date.now() + 60_000));
   runEarlyScript();
   await flush();
-  assert.equal(p.calls.length, 0, 'never a second possibly-rotating request');
+  assert.equal(meCalls(p.calls).length, 1, 'no stand-down');
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const got = auth.getUser();
-  await flush();
-  assert.equal(meCalls(p.calls).length, 1);
-  assert.equal(p.calls[0].headers.get('X-No-Auto-Refresh'), '1', 'the client\'s own non-rotating reconcile probe');
   p.calls[0].resolve(me(user));
   assert.deepEqual(await got, user);
+  assert.equal(auth.getState().status, 'authenticated');
+  assert.equal(meCalls(p.calls).length, 1, 'no probe of its own');
 });
 
-await test('another tab refreshed recently (shared stamp ahead): the early /me writes no marker', async () => {
+await test('the page script requests no Web Lock', async () => {
   const p = page();
-  p.storage.setItem(N.stamp, String(Date.now() + 60_000));
+  const names = [];
+  const locks = { request(name, _options, cb) { names.push(name); return Promise.resolve().then(cb); } };
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { locks }, configurable: true, writable: true });
+  try {
+    runEarlyScript();
+    await flush();
+    const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
+    const got = auth.getUser();
+    p.calls[0].resolve(me(user));
+    assert.deepEqual(await got, user);
+  } finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
+  assert.deepEqual(names, [], 'neither the script nor the client took a lock');
+});
+
+await test('page 1: the early /me is cut by navigation; page 2 boots normally and is signed in', async () => {
+  const p1 = page();
   runEarlyScript();
   await flush();
-  assert.equal(meCalls(p.calls).length, 1);
-  assert.equal(p.storage.getItem(N.pending), null);
-  p.calls[0].resolve(me(user));
+  const first = createSomewhereAuth({ mode: 'cookie', storage: p1.storage });
+  const check = first.getUser();
+  await flush();
+  p1.lifecycle('pagehide');
+  p1.calls[0].reject(new DOMException('The operation was aborted.', 'AbortError')); // the navigation cancels it
+  await check;
+  await flush();
+  assert.equal(meCalls(p1.calls).length, 1, 'page 1 sends nothing more');
+  const p2 = page(p1.storage); // the next document, same browser storage
+  runEarlyScript();
+  await flush();
+  assert.equal(meCalls(p2.calls).length, 1, 'page 2 starts its early /me as usual');
+  assert.equal(p2.calls[0].headers.get('X-No-Auto-Refresh'), null);
+  const second = createSomewhereAuth({ mode: 'cookie', storage: p2.storage });
+  const got = second.getUser();
+  p2.calls[0].resolve(me(user)); // the server accepts the replay within its grace window
+  assert.deepEqual(await got, user);
+  assert.equal(second.getState().status, 'authenticated');
+  assert.equal(second.getState().error, null, 'no SIGN_IN_REQUIRED');
+  assert.equal(meCalls(p2.calls).length, 1);
+  assert.deepEqual([...p2.storage.map.keys()], ['sw_auth_user'], 'no marker');
 });
 
 await test('a sign-out in THIS tab while the early /me is in flight: its late answer is never written', async () => {
@@ -156,7 +188,7 @@ await test('a client with other names never adopts it, and waits for it before i
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage, storageKey: 'other' });
   const got = auth.getUser();
   await flush();
-  assert.equal(meCalls(p.calls).length, 1, 'no second /me while the early one may still rotate');
+  assert.equal(meCalls(p.calls).length, 1, 'one /me at a time in this document');
   p.calls[0].resolve(me(user));
   await flush();
   const own = meCalls(p.calls);
@@ -180,34 +212,24 @@ await test('consumed once: the next check sends its own /me', async () => {
   assert.deepEqual(await second, user);
 });
 
-await test('an early /me lost to the network keeps the unknown outcome; the client reconciles without rotating', async () => {
+await test('an early /me lost to the network is a failed check; the next check sends a normal /me', async () => {
   const p = page();
   runEarlyScript();
   await flush();
   const auth = createSomewhereAuth({ mode: 'cookie', storage: p.storage });
   const got = auth.getUser();
   p.calls[0].reject(new TypeError('network'));
+  await got;
+  assert.equal(auth.getState().status, 'indeterminate');
+  assert.equal(meCalls(p.calls).length, 1, 'no probe of its own');
+  const retry = auth.getUser();
   await flush();
-  assert.ok(p.storage.getItem(N.pending), 'outcome unknown: marker kept');
-  const reconcile = meCalls(p.calls)[1];
-  assert.ok(reconcile, 'the client probes again');
-  assert.equal(reconcile.headers.get('X-No-Auto-Refresh'), '1', 'without rotating');
-  reconcile.resolve(me(user));
-  assert.deepEqual(await got, user);
-});
-
-await test('the page script holds the client\'s own refresh lock name while its /me is out', async () => {
-  const p = page();
-  const names = [];
-  let lockSignal = null;
-  const locks = { request(name, options, cb) { names.push(name); lockSignal = options?.signal; return Promise.resolve().then(cb); } };
-  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-  Object.defineProperty(globalThis, 'navigator', { value: { locks }, configurable: true, writable: true });
-  try { runEarlyScript(); await flush(); }
-  finally { if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; }
-  assert.deepEqual(names, [N.stamp]);
-  assert.ok(lockSignal instanceof AbortSignal, 'the lock request itself is cancellable');
-  p.calls[0].resolve(me(user));
+  const again = meCalls(p.calls)[1];
+  assert.ok(again, 'Retry reaches the server');
+  assert.equal(again.headers.get('X-No-Auto-Refresh'), null, 'a normal /me');
+  again.resolve(me(user));
+  assert.deepEqual(await retry, user);
+  assert.equal(p.storage.getItem('sw_auth_user:refresh-pending'), null);
 });
 
 await test('a never-settling early /me: a sign-out aborts it and completes', async () => {
@@ -218,16 +240,15 @@ await test('a never-settling early /me: a sign-out aborts it and completes', asy
   const out = auth.signOut();
   await flush();
   assert.equal(p.calls[0].aborted, true, 'the sign-out aborted the hung early /me');
-  assert.ok(p.storage.getItem(N.pending), 'outcome unknown: its marker is kept, never retried');
   const logout = p.calls.find((c) => c.path.endsWith('/logout'));
-  assert.ok(logout, 'the queued logout got the lock and went out');
+  assert.ok(logout, 'the queued logout went out');
   logout.resolve(Response.json({ ok: true }));
   await out;
   assert.equal(auth.getState().status, 'signed-out');
-  assert.equal(meCalls(p.calls).length, 1, 'no rotating retry');
+  assert.equal(meCalls(p.calls).length, 1, 'signed out: no /me after the logout');
 });
 
-await test('a never-settling early /me adopted by the first check: aborted at the client deadline, reconciled without rotating', async () => {
+await test('a never-settling early /me adopted by the first check: aborted at the client deadline; the next check sends a normal /me', async () => {
   const p = page();
   runEarlyScript();
   await flush();
@@ -236,11 +257,15 @@ await test('a never-settling early /me adopted by the first check: aborted at th
   await new Promise((r) => setTimeout(r, 80));
   await flush();
   assert.equal(p.calls[0].aborted, true, 'aborted at the deadline');
+  await got;
+  assert.equal(auth.getState().status, 'indeterminate', 'first auth settles at the deadline');
+  const retry = auth.getUser();
+  await flush();
   const probes = meCalls(p.calls);
-  assert.equal(probes.length, 2, 'one follow-up probe');
-  assert.equal(probes[1].headers.get('X-No-Auto-Refresh'), '1', 'the follow-up never rotates');
+  assert.equal(probes.length, 2);
+  assert.equal(probes[1].headers.get('X-No-Auto-Refresh'), null, 'a normal /me');
   probes[1].resolve(me(user));
-  assert.deepEqual(await got, user, 'first auth completes');
+  assert.deepEqual(await retry, user);
 });
 
 await test('with no client at all, the script\'s own deadline aborts the request', async () => {
@@ -254,7 +279,7 @@ await test('with no client at all, the script\'s own deadline aborts the request
   deadlines[0]();
   await flush();
   assert.equal(p.calls[0].aborted, true);
-  assert.ok(p.storage.getItem(N.pending), 'possibly rotated: marker kept for the client to reconcile');
+  assert.equal(p.storage.map.size, 0, 'nothing written');
 });
 
 
@@ -328,8 +353,7 @@ await test('headers arrive, the body stalls: the client deadline covers the body
   assert.ok(Date.now() - started < 1000, 'settled at the deadline despite the stalled body');
   assert.equal(auth.getState().status, 'indeterminate');
   assert.equal(p.calls[0].aborted, true, 'the stalled response was aborted');
-  assert.equal(p.storage.getItem(N.pending), null, 'the status already settled the rotation outcome');
-  assert.equal(meCalls(p.calls).length, 1, 'no follow-up probe needed');
+  assert.equal(meCalls(p.calls).length, 1, 'no follow-up probe');
 });
 
 await test('headers arrive, the body stalls: a sign-out ends the wait at once and logs out without waiting for a deadline', async () => {

@@ -15,6 +15,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = await mkdtemp(join(tmpdir(), 'sdk-signout-'));
 let failLogout = false;
 let failLogin = false;
+let loginDelay = 0;
 let logoutDelays = [];
 let accessLife = 60_000;
 let refreshEvents = [];
@@ -32,6 +33,8 @@ const server = createServer(async (req, res) => {
   }
   if (path === '/api/auth/login') {
     if (failLogin) return reply({ error: 'invalid credentials' }, 401);
+    if (loginDelay) await new Promise(resolve => setTimeout(resolve, loginDelay));
+    if (res.destroyed) return;
     res.setHeader('Set-Cookie', 'fixture_session=yes; HttpOnly; Path=/');
     return reply({ cookie_session: true, user: { id: 'fixture-user', email: 'fixture@example.invalid' } });
   }
@@ -137,20 +140,17 @@ try {
   results.push({ case: 'manual navigation after request started', cookieCleared: true, subsequentCheckSignedOut: true, events });
   await manual.context.close();
 
-  // Navigation before the logout can acquire the shared mutation lock. The
-  // replacement document must finish the real logout before ever restoring UI.
+  // Navigation before the queued logout starts (it waits behind a slow sign-in
+  // in this document's queue). The replacement document must finish the real
+  // logout before ever restoring UI.
   events = [];
   const queued = await open();
-  await queued.page.evaluate(() => {
-    void navigator.locks.request('sw_auth_user:refresh-at', () => {
-      window.fixtureLockHeld = true;
-      return new Promise(() => {});
-    });
-  });
-  await queued.page.waitForFunction(() => window.fixtureLockHeld === true);
+  loginDelay = 3000;
+  await queued.page.evaluate(() => { void window.fixtureAuth.signIn({ email: 'fixture@example.invalid', password: 'fixture' }).catch(() => {}); });
   await queued.page.getByTestId('logout').click();
   assert.equal(events.length, 0, 'logout has not reached the server');
   await queued.page.reload();
+  loginDelay = 0;
   await queued.page.getByTestId('natural-form').waitFor();
   await queued.page.waitForTimeout(650);
   assert.equal(await queued.page.getByTestId('natural-private').count(), 0);
