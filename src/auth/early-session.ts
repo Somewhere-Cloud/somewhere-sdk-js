@@ -16,11 +16,11 @@
 //  - It does nothing when this browser has a recorded sign-out (owed or done)
 //    or an unknown refresh outcome; the client handles those as it always has.
 //  - The client adopts it only for its very first check, before any sign-in or
-//    sign-out has started in this tab, and only when no session change has
-//    STARTED in another tab since the early request began (the cross-tab
-//    mutation marker the client writes at the start of every sign-in, sign-up,
-//    MFA completion and sign-out). Anything else, including a late answer after
-//    such a change, is discarded and the client checks normally.
+//    sign-out has started in this tab, and only if no session change reached
+//    this tab while it waited (another tab's completed sign-in or started
+//    sign-out arrives as a storage event that advances the client's
+//    generation). Anything else, including a late answer after such a change,
+//    is discarded and the client checks normally.
 //  - It is BOUNDED. One AbortController covers every stage: waiting for the
 //    refresh lock (the lock request carries the signal, so a request queued
 //    behind another tab's held lock is withdrawn without being sent), the /me
@@ -33,9 +33,6 @@
 //    exactly like the client's own interrupted /me (never retried; the next
 //    check reconciles without rotating). The lock is held only until the
 //    response headers arrive; the body is read outside it.
-//  - It FAILS CLOSED on freshness: if the cross-tab mutation marker cannot be
-//    read, the script does not start; if the client cannot read it at adoption,
-//    the answer is not adopted.
 //  - It is VOID once the page is hidden for navigation or frozen (`pagehide`,
 //    `freeze`): a page restored from the back/forward cache never adopts an
 //    answer from before it was hidden, consumed or not. It is also consumed
@@ -62,7 +59,6 @@ export function earlySessionNames(storageKey = 'sw_auth', baseUrl = '', authPath
     signOut: `${userKey}:sign-out:${base}${path}`,
     stamp: `${userKey}:refresh-at`,
     pending: `${userKey}:refresh-pending`,
-    mutation: `${userKey}:mutation`,
   };
 }
 
@@ -72,8 +68,6 @@ export type EarlySessionNames = ReturnType<typeof earlySessionNames>;
 export interface EarlySession {
   v: number;
   names: EarlySessionNames;
-  /** The cross-tab mutation marker when the request began. */
-  mutation: string | null;
   /** null: the script stood down under the lock (the client checks normally). */
   promise: Promise<{ res: Response; mayRotate: boolean } | null>;
   /** Abort it at whatever stage it is in (lock wait, request, body). */
@@ -122,11 +116,10 @@ try{ls=w.localStorage;}catch(e){return;}
 if(!ls||typeof w.fetch!=='function')return;
 var g=function(k){try{return ls.getItem(k);}catch(e){return null;}};
 if(g(N.signOut)||g(N.pending))return;
-var mutation;try{mutation=ls.getItem(N.mutation);}catch(e){return;}
 if(typeof w.AbortController!=='function')return;
 var ctl=new w.AbortController(),locks=w.navigator&&w.navigator.locks;
 var timer=setTimeout(function(){ctl.abort();},${EARLY_SESSION_TIMEOUT_MS});
-var E={v:${EARLY_SESSION_VERSION},names:N,mutation:mutation,dispatched:false,
+var E={v:${EARLY_SESSION_VERSION},names:N,dispatched:false,
 abort:function(){ctl.abort();},done:function(){clearTimeout(timer);}};
 var run=function(){
 if(ctl.signal.aborted||g(N.signOut)||g(N.pending))return null;
