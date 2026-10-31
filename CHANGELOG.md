@@ -6,6 +6,21 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.13.3
+
+### Changed
+
+- Signing in, signing up or starting a sign-out in one tab no longer makes
+  every other open tab re-check the session before that call finishes. Tabs
+  still update when the change completes, and when a sign-out starts.
+- After the server confirms a sign-out (`/logout`), the client forgets the
+  sign-out instead of treating the browser as signed out indefinitely. A session
+  that is created later, by any path, is honoured on the next check. Records
+  left by 0.13.x are cleared when read.
+- A sign-out the server has not confirmed yet is unchanged: it is kept, sent
+  again after a reload, and requests are sent without credentials until it
+  succeeds.
+
 ## 0.13.2
 
 ### Added
