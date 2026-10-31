@@ -7,9 +7,12 @@ export const user = { id: 'alice', email: 'alice@example.test' };
 export const bob = { id: 'bob', email: 'bob@example.test' };
 
 // A page: shared localStorage, window events, and a fetch whose answers the test releases.
-export function page() {
-  const map = new Map();
-  const storage = { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k), map };
+// Pass the previous page's storage to model the next page load in the same browser.
+export function page(storage = null) {
+  if (!storage) {
+    const map = new Map();
+    storage = { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k), map };
+  }
   const events = new EventTarget();
   const calls = [];
   const fetch = (input, init = {}) => new Promise((resolve, reject) => {
