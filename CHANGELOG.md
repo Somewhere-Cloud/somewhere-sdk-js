@@ -6,6 +6,32 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.14.0
+
+### Changed
+
+- The client no longer keeps a "refresh outcome unknown" marker or takes a
+  cross-tab lock around session refresh. The platform now ends only the session
+  whose refresh token was replayed (not every session of the user), so a lost
+  refresh response costs at most one sign-in on one device. An interrupted
+  refresh or `/me` is simply a failed request: the next one tries again, and a
+  401 means signed out.
+- The leftover 0.13.x refresh-pending key is removed from storage when a client
+  is created.
+- The early-session script no longer writes or reads that marker, and no
+  longer requests a Web Lock. A 0.13.x early-session script on the page is still
+  adopted by this client.
+
+### Removed
+
+- The `REFRESH_OUTCOME_UNKNOWN` error code. Code that checked for it can drop
+  that branch; a failed refresh now surfaces as an ordinary failed request.
+
+### Unchanged
+
+- The in-document request queue, `mutationTimeoutMs`, and the sign-out that
+  is retried after a reload until the server confirms it.
+
 ## 0.13.3
 
 ### Changed
