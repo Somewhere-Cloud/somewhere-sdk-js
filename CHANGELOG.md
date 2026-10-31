@@ -6,6 +6,26 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.14.1
+
+### Changed
+
+- `MFA_REQUIRED` in both clients now says "Enter the 6-digit code we emailed you
+  to finish signing in." instead of asking for an authenticator or backup code,
+  and the `AuthCallback` form asks for "The 6-digit code we emailed you".
+
+### Added
+
+- Email sign-in code steps in both clients (`createSomewhereAuth` and
+  `createClient().auth`): `resendMfaCode()`, `enrollMfa()`,
+  `verifyMfaEnrollment({ challenge_id, code })` and the two-step
+  `unenrollMfa({ password })` then `unenrollMfa({ challenge_id, code })`.
+  Refusals keep the platform's code and status (for example
+  `AUTH_MFA_LOCKED` or `AUTH_MFA_REQUIRED_BY_APP`).
+- The `somewhereAuth` handler serves `/mfa/challenge` (resend), `/mfa/enroll`,
+  `/mfa/verify` and `/mfa/unenroll`, and answers 501 `MFA_UNAVAILABLE` on a
+  runtime that predates email sign-in codes.
+
 ## 0.14.0
 
 ### Changed
