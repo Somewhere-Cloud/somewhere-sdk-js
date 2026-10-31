@@ -279,9 +279,6 @@ function oauthAttempt(input: { attempt?: string }): { attempt?: string } {
 }
 
 /** undefined → 30000; anything else must be 1..2147483647 ms (setTimeout's range). */
-/** How long a confirmed sign-out fences late pre-logout answers (default request deadline 30 s, plus margin). */
-const CONFIRMED_SIGN_OUT_FENCE_MS = 120_000;
-
 function mutationTimeout(value: unknown): number {
   if (value === undefined) return 30_000;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 2_147_483_647) {
@@ -304,12 +301,11 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // before the queued request starts. Only a confirmed new sign-in replaces it.
   //  - `pending:<ms>:<rand>`: the server has not confirmed /logout. Kept until it
   //    does (retried after reload) or a sign-in replaces it. Never expires.
-  //  - `confirmed:<ms>…`: the server confirmed /logout. A short fence only: for
-  //    CONFIRMED_SIGN_OUT_FENCE_MS it stops a /me answer sent BEFORE the logout
-  //    (in another client on this page, or arriving late) from showing the old
-  //    user. The server has already ended that session (its rows are deleted),
-  //    so after the fence the client simply asks the server again. Older or
-  //    unreadable confirmed records (including 0.13.x's, which never expired)
+  //  - Once the server confirms /logout the record is removed: the server ended
+  //    that session (its rows are deleted), so from then on the server's answer
+  //    is the truth. A /me answer sent before the logout may still briefly show
+  //    the old user; the next check returns 401. `confirmed:` records left by
+  //    0.13.x (which never expired, and made the client ignore new sessions)
   //    are removed when read.
   const signOutKey = `${userKey}:sign-out:${baseUrl}${authPath}`;
   let signOutIntent: string | null = null;
@@ -318,10 +314,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (preferCookie && signOutStorageAvailable) {
       try { signOutIntent = storage.getItem(signOutKey); } catch { /* retain memory state */ }
     }
-    if (signOutIntent?.startsWith('confirmed:')) {
-      const at = Number(signOutIntent.slice('confirmed:'.length).split(':')[0]);
-      if (!(Number.isFinite(at) && Date.now() - at < CONFIRMED_SIGN_OUT_FENCE_MS && at <= Date.now())) writeSignOutIntent(null);
-    }
+    if (signOutIntent?.startsWith('confirmed:')) writeSignOutIntent(null);
     return signOutIntent;
   }
   function writeSignOutIntent(next: string | null) {
@@ -1242,8 +1235,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         if (res.body !== null && res.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'application/json') {
           void res.text().catch(() => {});
         }
-        // Confirmed: no obligation is left. Only a short fence remains (see signOutKey).
-        if (preferCookie && readSignOutIntent() === intent) writeSignOutIntent(`confirmed:${Date.now()}`);
+        // Confirmed: no obligation is left; the server's answer is the truth now.
+        if (preferCookie && readSignOutIntent() === intent) writeSignOutIntent(null);
         owedSignOut = null;
         if (error?.code === 'SIGN_OUT_UNCONFIRMED') error = null;
         emit();
