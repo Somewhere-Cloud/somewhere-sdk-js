@@ -76,6 +76,10 @@ const contract = [
   { client: 'discordSignInUrl', route: 'GET /api/auth/discord-url', runtime: 'auth.oauthStart' },
   { client: 'completeDiscordSignIn', route: 'POST /api/auth/discord', runtime: 'auth.discordExchange' },
   { client: 'completeMfa', route: 'POST /api/auth/mfa/challenge', runtime: 'auth.mfa.challengeWithCookie' },
+  { client: 'resendMfaCode', route: 'POST /api/auth/mfa/challenge', runtime: 'auth.mfa.resend' },
+  { client: 'enrollMfa', route: 'POST /api/auth/mfa/enroll', runtime: 'auth.mfa.enrollWithCookie' },
+  { client: 'verifyMfaEnrollment', route: 'POST /api/auth/mfa/verify', runtime: 'auth.mfa.verifyWithCookie' },
+  { client: 'unenrollMfa', route: 'POST /api/auth/mfa/unenroll', runtime: 'auth.mfa.unenrollWithCookie' },
   { client: 'signOut', route: 'POST /api/auth/logout', runtime: 'auth.logoutWithCookie' },
   { client: 'getUser', route: 'GET /api/auth/me', runtime: 'auth.fromRequest' },
   { client: 'getSession', kind: 'local' },
@@ -114,7 +118,13 @@ const sw = {
     signInWithOtp: called('auth.signInWithOtp', { ok: true }),
     verifyOtp: called('auth.verifyOtp', tokenBundle),
     setSessionCookies: (...args) => runtimeCalls.push({ name: 'auth.setSessionCookies', args }),
-    mfa: { challengeWithCookie: called('auth.mfa.challengeWithCookie', { user, expires_at }) },
+    mfa: {
+      challengeWithCookie: called('auth.mfa.challengeWithCookie', { user, expires_at }),
+      resend: called('auth.mfa.resend', { sent: true, delivery: 'sent', expires_in: 240 }),
+      enrollWithCookie: called('auth.mfa.enrollWithCookie', { challenge_id: 'enroll:s:1', delivery: 'sent', expires_in: 300 }),
+      verifyWithCookie: called('auth.mfa.verifyWithCookie', { enrolled: true, method: 'email' }),
+      unenrollWithCookie: called('auth.mfa.unenrollWithCookie', { challenge_id: 'unenroll:s:1', delivery: 'sent', expires_in: 300 }),
+    },
     logoutWithCookie: called('auth.logoutWithCookie', { ok: true }),
     requestEmailVerificationWithCookie: called('auth.requestEmailVerificationWithCookie', { sent: true, code_created: true, expires_in_seconds: 900 }),
     verifyEmailWithCookie: called('auth.verifyEmailWithCookie', { verified: true }),
@@ -180,6 +190,17 @@ const invoke = {
     } finally { sw.auth.loginWithCookie = original; }
     return auth.completeMfa({ code: '123456' });
   },
+  resendMfaCode: async () => {
+    const original = sw.auth.loginWithCookie;
+    sw.auth.loginWithCookie = async () => ({ mfa_required: true, mfa_token: 'matrix-pending' });
+    try { await auth.signIn({ email: user.email, password: 'password' }); } catch (error) {
+      if (error.code !== 'MFA_REQUIRED') throw error;
+    } finally { sw.auth.loginWithCookie = original; }
+    return auth.resendMfaCode();
+  },
+  enrollMfa: () => auth.enrollMfa(),
+  verifyMfaEnrollment: () => auth.verifyMfaEnrollment({ challenge_id: 'enroll:s:1', code: '123456' }),
+  unenrollMfa: () => auth.unenrollMfa({ password: 'password' }),
   signOut: () => auth.signOut(),
   getUser: () => auth.getUser(),
   getSession: () => auth.getSession(),

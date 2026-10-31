@@ -373,11 +373,20 @@ export function AuthCallback(props: {
         props.onError?.(message);
       }).finally(() => { setBusy(false); setMfaCode(''); });
     }}>
-      <label>Authenticator or backup code
-        <input autoComplete="one-time-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} disabled={busy} autoFocus />
+      <label>The 6-digit code we emailed you
+        <input autoComplete="one-time-code" inputMode="numeric" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} disabled={busy} autoFocus />
       </label>
       {error ? <p role="alert">{error}</p> : null}
       <button type="submit" disabled={busy || !mfaCode.trim()}>{busy ? 'Signing in…' : 'Finish signing in'}</button>
+      <button type="button" disabled={busy} onClick={() => {
+        setBusy(true);
+        setError(null);
+        auth.resendMfaCode().catch((e: unknown) => {
+          const message = e instanceof Error ? e.message : 'Could not send a new code.';
+          setError(message);
+          props.onError?.(message);
+        }).finally(() => setBusy(false));
+      }}>Send a new code</button>
     </form>
   );
   if (error) return <>{props.children ?? error}</>;

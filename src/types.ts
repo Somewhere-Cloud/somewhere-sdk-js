@@ -161,6 +161,29 @@ export interface AuthResponse {
   session: Session | null;
 }
 
+/* ─── Email sign-in codes ──────────────────────────────────────── */
+
+/** How a mailed code left the platform: sent, queued, or not confirmed (it may still arrive). */
+export type MfaDelivery = 'sent' | 'pending' | 'unknown';
+
+/** A code was mailed to the account's verified address; the next step names `challenge_id`. */
+export interface MfaCodeSent {
+  challenge_id: string;
+  delivery: MfaDelivery;
+  /** Seconds the code stays valid (5 minutes). */
+  expires_in: number;
+}
+
+/** A new code for the pending sign-in. The sign-in keeps its original expiry. */
+export interface MfaCodeResent {
+  sent: boolean;
+  delivery: MfaDelivery;
+  expires_in: number;
+}
+
+/** Turning codes off: step 1 sends `{ password }` and gets a code; step 2 sends that `challenge_id` and the code. */
+export type MfaUnenrollInput = { password: string } | { challenge_id: string; code: string };
+
 /* ─── Storage ──────────────────────────────────────────────────── */
 
 export interface StorageFileObject {

@@ -241,8 +241,18 @@ export interface SomewhereAuth {
   /** Exchange a Discord `?code=` (from the callback) for a session. Pass the
    *  callback's `?attempt=` too; on the callback page it is read from the URL. */
   completeDiscordSignIn(input: { code: string; attempt?: string }): Promise<User>;
-  /** Complete the pending sign-in with an authenticator or backup code. */
+  /** Complete the pending sign-in (after `MFA_REQUIRED`) with the 6-digit code from the email. */
   completeMfa(input: { code: string }): Promise<User>;
+  /** Mail a new code for the pending sign-in (at most one a minute and 5 an hour per account). */
+  resendMfaCode(): Promise<{ sent: boolean; delivery: 'sent' | 'pending' | 'unknown'; expires_in: number }>;
+  /** Turn on email sign-in codes for the signed-in account (the app's policy must be optional or required): a code
+   *  goes to its verified address. Resolves `{ enrolled: true }` when codes are already on. */
+  enrollMfa(): Promise<MfaCodeSent | { enrolled: true; method: 'email' }>;
+  /** Confirm `enrollMfa` with its `challenge_id` and the emailed code. No session ends. */
+  verifyMfaEnrollment(input: { challenge_id: string; code: string }): Promise<{ enrolled: true; method: 'email' }>;
+  /** Turn email sign-in codes off in two steps: `{ password }` mails a code (resolves `{ challenge_id }`), then
+   *  `{ challenge_id, code }` turns them off (`{ enrolled: false }`). Refused (409) when the app requires codes. */
+  unenrollMfa(input: { password: string } | { challenge_id: string; code: string }): Promise<MfaCodeSent | { enrolled: false }>;
   signOut(): Promise<void>;
   /** Re-fetch the current user from the backend (validates + refreshes). */
   getUser(): Promise<User | null>;
@@ -271,6 +281,17 @@ interface TokenResponse {
 /** The social callback's public attempt id: passed explicitly, or read from the
  *  callback page's own URL. It only selects which of this browser's attempt
  *  cookies the server presents; the platform proves it before the code counts. */
+/** A code was mailed to the account's verified address; the next step names `challenge_id`. */
+export interface MfaCodeSent { challenge_id: string; delivery: 'sent' | 'pending' | 'unknown'; expires_in: number }
+
+/** An MFA step's answer from the auth route: its data, or an AuthError with the platform's code and status. */
+async function mfaAnswer<T>(res: Response, failure: string): Promise<T> {
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & { data?: unknown; error?: string; message?: string };
+  const data = (body.data && typeof body.data === 'object' ? body.data : body) as Record<string, unknown> & { error?: string; message?: string };
+  if (!res.ok) throw new AuthError(data.message || body.message || data.error || body.error || `${failure} (${res.status})`, res.status, data.error || body.error);
+  return data as T;
+}
+
 function oauthAttempt(input: { attempt?: string }): { attempt?: string } {
   if (typeof input.attempt === 'string') return { attempt: input.attempt };
   if (typeof window === 'undefined') return {};
@@ -807,7 +828,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (challenge) {
         pendingMfa = challenge.mfa_token;
         if (status === 'checking') settle('signed-out', null);
-        throw new AuthError('Enter an authenticator or backup code to finish signing in.', res.status, 'MFA_REQUIRED');
+        throw new AuthError('Enter the 6-digit code we emailed you to finish signing in.', res.status, 'MFA_REQUIRED');
       }
       if (!res.ok) throw new AuthError(body.message || body.error || `Request failed (${res.status})`, res.status);
       // Cookie handshake confirmed: the backend set the httpOnly pair and the
@@ -1055,6 +1076,26 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       if (!pendingMfa) return Promise.reject(new AuthError('There is no pending MFA sign-in. Start signing in again.', 400, 'MFA_CHALLENGE_REQUIRED'));
       return postForSession('/mfa/challenge', { mfa_token: pendingMfa, code: input.code }, true);
     },
+    resendMfaCode: async () => {
+      if (!pendingMfa) throw new AuthError('There is no pending MFA sign-in. Start signing in again.', 400, 'MFA_CHALLENGE_REQUIRED');
+      // No session exists yet: the pending ticket is the only authority, so this is a plain request.
+      const res = await fetch(url('/mfa/challenge'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', [MODE_HINT_HEADER]: preferCookie ? 'cookie' : 'header' },
+        body: JSON.stringify({ mfa_token: pendingMfa, resend: true }),
+        ...(preferCookie ? { credentials: 'include' as RequestCredentials } : {}),
+      });
+      return mfaAnswer(res, 'Could not send a new code');
+    },
+    enrollMfa: async () => mfaAnswer(await authFetch(url('/mfa/enroll'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'email' }),
+    }), 'Could not turn on sign-in codes'),
+    verifyMfaEnrollment: async (i) => mfaAnswer(await authFetch(url('/mfa/verify'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: i.challenge_id, code: i.code }),
+    }), 'Could not confirm the code'),
+    unenrollMfa: async (i) => mfaAnswer(await authFetch(url('/mfa/unenroll'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify('challenge_id' in i ? { challenge_id: i.challenge_id, code: i.code } : { password: i.password }),
+    }), 'Could not turn off sign-in codes'),
     signOut: () => {
       pendingMfa = null;
       const existingIntent = readSignOutIntent();
@@ -1208,7 +1249,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
 export class AuthError extends Error {
   status: number;
   /** Set when the client itself refuses a response, e.g.
-   *  'COOKIE_SESSION_NOT_CONFIRMED'. Undefined for server-reported failures. */
+   *  'COOKIE_SESSION_NOT_CONFIRMED', and for the email sign-in code steps the platform's code (e.g.
+   *  'AUTH_MFA_LOCKED', 'AUTH_MFA_REQUIRED_BY_APP'). Otherwise undefined for server-reported failures. */
   code?: string;
   constructor(message: string, status: number, code?: string) {
     super(message);

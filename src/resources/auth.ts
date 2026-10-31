@@ -5,6 +5,9 @@ import type {
   AuthChangeEvent,
   AuthResponse,
   AuthSubscription,
+  MfaCodeResent,
+  MfaCodeSent,
+  MfaUnenrollInput,
   Result,
   Session,
   User,
@@ -66,6 +69,13 @@ interface PendingAuth {
   queue: Promise<unknown>;
 }
 const pendingAuth = new WeakMap<AuthClient, PendingAuth>();
+
+/** A password sign-in that needs the second step: the code went to the account's email. */
+const MFA_REQUIRED_MESSAGE = 'Enter the 6-digit code we emailed you to finish signing in.';
+
+function mfaFailure<T>(code: string, message: string, status = 400): Result<T> {
+  return { data: null, error: new SomewhereError({ code, message, statusCode: status, retry: false, retryAfterMs: null }), status };
+}
 
 function authFailure(code: string, message: string, status = 400): Result<AuthResponse> {
   return { data: { user: null, session: null }, error: new SomewhereError({
@@ -267,13 +277,87 @@ export class AuthClient {
     return { data: { provider: 'google', url }, error: null, status: 200 };
   }
 
-  /** Finish the current sign-in; pending credentials remain private to this instance. */
+  /** Finish the current sign-in with the 6-digit code from the email (after `MFA_REQUIRED`); pending credentials
+   *  remain private to this instance. */
   completeMfa(input: { code: string }): Promise<Result<AuthResponse>> {
     const token = pendingAuth.get(this)!.token;
     if (!token) return Promise.resolve(authFailure('MFA_CHALLENGE_REQUIRED', 'Start signing in again; there is no pending MFA challenge.'));
     return this.sessionMutation((guard, signal) => this.cookieMode
       ? this.runCookieSessionFlow('/mfa/challenge', { mfa_token: token, code: input.code }, guard, signal)
       : this.runAuthFlow('POST', '/auth/mfa/challenge', { mfa_token: token, code: input.code }, guard, signal), true);
+  }
+
+  /** Mail a new code for the pending sign-in (at most one a minute and 5 an hour per account). */
+  resendMfaCode(): Promise<Result<MfaCodeResent>> {
+    const token = pendingAuth.get(this)!.token;
+    if (!token) return Promise.resolve(mfaFailure('MFA_CHALLENGE_REQUIRED', 'Start signing in again; there is no pending MFA challenge.'));
+    if (this.cookieMode) return this.runCookieMfa<MfaCodeResent>('/mfa/challenge', { mfa_token: token, resend: true });
+    const projectId = this.client.requireProjectId(undefined, 'auth/mfa/challenge');
+    return this.runMfaCall<MfaCodeResent>('/auth/mfa/challenge', 'developer', { mfa_token: token, resend: true, project_id: projectId });
+  }
+
+  /** Turn on email sign-in codes for the signed-in user (the app's policy must be optional or required): a code
+   *  goes to their verified address. Resolves `{ enrolled: true }` when codes are already on. */
+  enrollMfa(): Promise<Result<MfaCodeSent | { enrolled: true; method: 'email' }>> {
+    return this.signedInMfa('/mfa/enroll', { method: 'email' });
+  }
+
+  /** Confirm `enrollMfa` with its `challenge_id` and the emailed code. From then on every password sign-in asks for
+   *  a code. No session ends. */
+  verifyMfaEnrollment(input: { challenge_id: string; code: string }): Promise<Result<{ enrolled: true; method: 'email' }>> {
+    return this.signedInMfa('/mfa/verify', { challenge_id: input.challenge_id, code: input.code });
+  }
+
+  /** Turn email sign-in codes off in two steps: `{ password }` mails a code (resolves `{ challenge_id }`), then
+   *  `{ challenge_id, code }` turns codes off (`{ enrolled: false }`). Refused when the app requires codes. */
+  unenrollMfa(input: MfaUnenrollInput): Promise<Result<MfaCodeSent | { enrolled: false }>> {
+    return this.signedInMfa('/mfa/unenroll', 'challenge_id' in input
+      ? { challenge_id: input.challenge_id, code: input.code } : { password: input.password });
+  }
+
+  /** A signed-in MFA step: through your auth route in cookie mode (the session is an httpOnly cookie), else with the
+   *  session token against the platform. */
+  private signedInMfa<T>(path: '/mfa/enroll' | '/mfa/verify' | '/mfa/unenroll', body: Record<string, unknown>): Promise<Result<T>> {
+    if (this.cookieMode && !this.client.hasSession) return this.runCookieMfa<T>(path, body);
+    return this.runMfaCall<T>('/auth' + path, 'session', body);
+  }
+
+  private async runMfaCall<T>(path: string, auth: 'session' | 'developer', body: Record<string, unknown>): Promise<Result<T>> {
+    try {
+      const data = await this.client.call<T>('POST', path, { auth, body });
+      return { data, error: null, status: 200 };
+    } catch (err) {
+      if (err instanceof SomewhereError) return { data: null, error: err, status: err.statusCode };
+      throw err;
+    }
+  }
+
+  /** Cookie mode: the MFA step through the app's auth route, which runs it with the request's own session. */
+  private async runCookieMfa<T>(path: string, body: Record<string, unknown>): Promise<Result<T>> {
+    try {
+      const res = await this.client.rawFetch(this.client.authPath + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Sw-Auth-Mode': 'cookie' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      } as RequestInit);
+      const responseBody = (await res.json().catch(() => null)) as (Record<string, unknown> & { data?: unknown; error?: string; message?: string }) | null;
+      const detail = (responseBody && typeof responseBody.data === 'object' && responseBody.data !== null ? responseBody.data : responseBody) as
+        (Record<string, unknown> & { error?: string; message?: string }) | null;
+      if (!res.ok) {
+        return { data: null, status: res.status, error: new SomewhereError({
+          code: detail?.error ?? responseBody?.error ?? 'AUTH_ERROR',
+          message: detail?.message ?? responseBody?.message ?? `Auth request failed (${res.status}).`,
+          statusCode: res.status, retry: res.status >= 500, retryAfterMs: null, body: responseBody,
+        }) };
+      }
+      return { data: detail as T, error: null, status: res.status };
+    } catch (err) {
+      return { data: null, status: 0, error: new SomewhereError({
+        code: 'NETWORK_ERROR', message: err instanceof Error ? err.message : 'Network error reaching your auth route.',
+        statusCode: 0, retry: true, retryAfterMs: null,
+      }) };
+    }
   }
 
   signOut(): Promise<Result<null>> {
@@ -731,7 +815,7 @@ export class AuthClient {
     const challenge = mfaChallenge(body);
     if (challenge) {
       pendingAuth.get(this)!.token = challenge.mfa_token;
-      return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.', res.status);
+      return authFailure('MFA_REQUIRED', MFA_REQUIRED_MESSAGE, res.status);
     }
     if (!res.ok) {
       return {
@@ -902,7 +986,7 @@ export class AuthClient {
       const challenge = mfaChallenge(result);
       if (challenge) {
         pendingAuth.get(this)!.token = challenge.mfa_token;
-        return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.');
+        return authFailure('MFA_REQUIRED', MFA_REQUIRED_MESSAGE);
       }
       if (!isAuthUser(result.user)) return authFailure('INVALID_AUTH_RESPONSE', 'Auth response did not include a valid user.', 502);
       const access = result.access_token ?? result.token;
@@ -925,7 +1009,7 @@ export class AuthClient {
         const challenge = mfaChallenge(err.body);
         if (challenge) {
           pendingAuth.get(this)!.token = challenge.mfa_token;
-          return authFailure('MFA_REQUIRED', 'Enter an authenticator or backup code to finish signing in.', err.statusCode);
+          return authFailure('MFA_REQUIRED', MFA_REQUIRED_MESSAGE, err.statusCode);
         }
         return { data: { user: null, session: null }, error: err, status: err.statusCode };
       }

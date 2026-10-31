@@ -42,9 +42,14 @@ export interface SwAuthNamespace {
       password: string,
       opts?: { display_name?: string },
     ): Promise<unknown>;
+    /** Email sign-in codes. Each is optional so the handler answers 501 on a runtime that predates it. */
     mfa?: {
       challenge?(opts: { mfa_token: string; code: string }): Promise<unknown>;
       challengeWithCookie?(opts: { mfa_token: string; code: string }): Promise<unknown>;
+      resend?(opts: { mfa_token: string }): Promise<unknown>;
+      enrollWithCookie?(req: Request): Promise<unknown>;
+      verifyWithCookie?(req: Request, opts: { challenge_id: string; code: string }): Promise<unknown>;
+      unenrollWithCookie?(req: Request, opts: { password: string } | { challenge_id: string; code: string }): Promise<unknown>;
     };
     logout(opts: Record<string, unknown>): Promise<unknown>;
     fromRequest(req: Request, enrich?: unknown): Promise<unknown>;
@@ -103,6 +108,19 @@ function verificationFailed(err: unknown): Response {
   const status = typeof e.status === 'number' && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 502;
   const message = typeof e.message === 'string' && e.message ? e.message : 'Email verification failed.';
   return json({ error: code, message }, status);
+}
+
+/** A refused email sign-in code step, keeping the platform's code and its 4xx or 5xx status. */
+function mfaFailed(err: unknown): Response {
+  const e = (err && typeof err === 'object' ? err : {}) as { code?: unknown; status?: unknown; message?: unknown };
+  const code = typeof e.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(e.code) ? e.code : 'MFA_STEP_FAILED';
+  const status = typeof e.status === 'number' && Number.isInteger(e.status) && e.status >= 400 && e.status < 600 ? e.status : 502;
+  const message = typeof e.message === 'string' && e.message ? e.message : 'The sign-in code step failed.';
+  return json({ error: code, message }, status);
+}
+
+function mfaUnavailable(): Response {
+  return json({ error: 'MFA_UNAVAILABLE', message: 'This deploy predates email sign-in codes. Redeploy to pick up the current runtime.' }, 501);
 }
 
 function logoutRefused(code: string, message: string, status: number): Response {
@@ -269,6 +287,12 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
     }
     if (method === 'POST' && sub === '/mfa/challenge') {
       const b = await readBody();
+      // A new code for the pending sign-in: no session exists yet, the ticket is the only authority.
+      if (b.resend === true) {
+        if (typeof b.mfa_token !== 'string' || !b.mfa_token) return json({ error: 'VALIDATION_ERROR', message: 'A pending MFA challenge is required.' }, 400);
+        if (typeof sw.auth.mfa?.resend !== 'function') return mfaUnavailable();
+        try { return json(await sw.auth.mfa.resend({ mfa_token: b.mfa_token })); } catch (err) { return mfaFailed(err); }
+      }
       if (typeof b.mfa_token !== 'string' || !b.mfa_token || typeof b.code !== 'string' || !b.code.trim()) {
         return json({ error: 'VALIDATION_ERROR', message: 'A pending MFA challenge and code are required.' }, 400);
       }
@@ -278,6 +302,27 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       return wantsCookie
         ? json({ user: unwrapAuthUser(result), cookie_session: true, expires_at: (result as TokenBundle).expires_at })
         : sessionResponse(result);
+    }
+    // Turning email sign-in codes on and off, for the request's own session (the httpOnly cookie, or a Bearer
+    // header). The challenge ids and codes are the step's own one-time credentials.
+    if (method === 'POST' && (sub === '/mfa/enroll' || sub === '/mfa/verify' || sub === '/mfa/unenroll')) {
+      const mfa = sw.auth.mfa;
+      const b = await readBody();
+      try {
+        if (sub === '/mfa/enroll') {
+          if (typeof mfa?.enrollWithCookie !== 'function') return mfaUnavailable();
+          return json(await mfa.enrollWithCookie(req));
+        }
+        if (sub === '/mfa/verify') {
+          if (typeof mfa?.verifyWithCookie !== 'function') return mfaUnavailable();
+          return json(await mfa.verifyWithCookie(req, { challenge_id: String(b.challenge_id ?? ''), code: String(b.code ?? '') }));
+        }
+        if (typeof mfa?.unenrollWithCookie !== 'function') return mfaUnavailable();
+        return json(await mfa.unenrollWithCookie(req, typeof b.challenge_id === 'string'
+          ? { challenge_id: b.challenge_id, code: String(b.code ?? '') } : { password: String(b.password ?? '') }));
+      } catch (err) {
+        return mfaFailed(err);
+      }
     }
     if (method === 'POST' && sub === '/logout') {
       // Header mode: the platform revokes a session by its refresh token, which
