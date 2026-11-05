@@ -1,10 +1,16 @@
 # Publish only an exact protected-master source with npm provenance.
-# Scoped bootstrap is manual only and must select master.
+# Manual dispatch only, and it must select master.
 # This guard controls the existing workflow, not writers replacing that workflow
 # on an unprotected ref. An external publication boundary remains root-owned.
-# npm authentication: trusted publisher for @somewhere-cloud/sdk = owner Somewhere-Cloud,
-# repository somewhere-sdk-js, workflow publish.yml, no environment. NPM_CLOUD_BOOTSTRAP_TOKEN is
-# set only for the first-version bootstrap and removed afterwards.
+#
+# Release process: merge the version PR to master, then dispatch this workflow on
+# master (gh workflow run publish.yml -R Somewhere-Cloud/somewhere-sdk-js --ref master).
+#
+# npm authentication: trusted publishing only. npmjs.com trusts the GitHub Actions
+# OIDC token for owner Somewhere-Cloud, repository somewhere-sdk-js, workflow
+# filename publish.yml, no environment (package Settings -> Publishing access).
+# No npm token secret is used anywhere; without a configured trusted publisher
+# the publish step fails with E404/E403 instead of using a stale credential.
 name: Publish to npm
 
 on:
@@ -47,18 +53,33 @@ jobs:
         env:
           ADMITTED_SOURCE_SHA: ${{ needs.admission.outputs.source_sha }}
         run: test "$(git rev-parse HEAD)" = "$ADMITTED_SOURCE_SHA"
+      # No registry input to setup-node: it would write an _authToken placeholder
+      # into .npmrc. The only credential this job ever holds is the OIDC id-token.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
       - run: npm install -g npm@11.19.0 # trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm test
-      - name: Publish (or stage the first version for maintainer approval)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_CLOUD_BOOTSTRAP_TOKEN }} # first-version bootstrap only
-          FIRST_VERSION_STAGE: ${{ vars.NPM_FIRST_VERSION_STAGE }} # unset by default
+      - name: Refuse a version that already exists on npm
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_CLOUD_BOOTSTRAP_TOKEN is required for bootstrap" >&2; exit 1; fi
-          if [ "$FIRST_VERSION_STAGE" = "1" ]; then npm stage publish --provenance --access public
-          else npm publish --provenance --access public; fi
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "@somewhere-cloud/sdk@$version" version >/dev/null 2>&1; then echo "@somewhere-cloud/sdk@$version already exists on npm; bump the version" >&2; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        id: candidate
+      - name: Publish with provenance (npm trusted publishing, no token)
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN:-}" ] || [ -n "${NPM_TOKEN:-}" ]; then echo "an npm token is set; this publisher authenticates only through OIDC" >&2; exit 1; fi
+          npm publish --provenance --access public
+      - name: Confirm npm resolves the version
+        env:
+          VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          integrity=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            integrity="$(npm view "@somewhere-cloud/sdk@$VERSION" dist.integrity 2>/dev/null || true)"
+            case "$integrity" in sha512-*) break;; esac
+            sleep 30
+          done
+          case "$integrity" in sha512-*) echo "@somewhere-cloud/sdk@$VERSION dist.integrity=$integrity";; *) echo "npm view returned no dist.integrity for @somewhere-cloud/sdk@$VERSION" >&2; exit 1;; esac
+          echo "Published and verified: @somewhere-cloud/sdk@$VERSION ($integrity)" >> "$GITHUB_STEP_SUMMARY"

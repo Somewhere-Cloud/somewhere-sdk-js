@@ -39,6 +39,10 @@ assert.match(publish, /id-token: write/);
 assert.match(publish, /git rev-parse HEAD/);
 assert.ok(publish.indexOf('npm test') < publish.indexOf('npm publish') && publish.includes('npm test'));
 assert.equal((publish.match(/npm publish --provenance --access public/g) ?? []).length, 1);
+// Trusted publishing only: no npm token, no staging path, no registry placeholder token.
+assert.doesNotMatch(publish, /secrets\.|NODE_AUTH_TOKEN: |NPM_TOKEN: |npm stage|FIRST_VERSION_STAGE|registry-url/);
+assert.ok(publish.indexOf('already exists on npm') < publish.indexOf('npm publish'), 'refuse an existing version before publishing');
+assert.ok(publish.indexOf('dist.integrity') > publish.indexOf('npm publish'), 'npm view resolves the version after publishing');
 const fixture = mkdtempSync(join(tmpdir(), 'sdk-publish-admission-'));
 const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const script = fileURLToPath(new URL('./publish-master-admission.mjs', import.meta.url));
