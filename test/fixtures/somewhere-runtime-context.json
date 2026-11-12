@@ -1,29 +1,4 @@
 {
-  "purpose": "Test-only frozen exact extract of the platform runtime context declarations, so the SDK type tests check somewhereAuth against the real generated SomewhereRuntimeContext. Not published (package.json files: dist, README.md, LICENSE).",
-  "source": {
-    "repository": "somewhere-tech platform (local worktree /Volumes/pmwork/wt/social-signin-binding-20261006, branch sessions/social-signin-binding-20261006, read-only; unreleased candidate)",
-    "commit": "94392800200a18a1942b73422eac9937ce9ee282",
-    "path": "worker/containers/compile/runtime-types.cjs",
-    "git_blob": "aaa1c1366c9573525adcbc5661f3da6d91de79ed",
-    "sha256": "9d1ca5aae395e309d63b5d3f7690888efa836a71b2750588d867bdc24939fbd5"
-  },
-  "extraction": {
-    "method": "node require() of the committed blob (git show), concatenating the exported strings in this order",
-    "exports": [
-      "RUNTIME_CONTEXT_DECLARATION",
-      "ENDPOINT_DECLARATION"
-    ],
-    "node": "v26.8.1",
-    "transform": "none (exact string bytes, UTF-8, no header)"
-  },
-  "declarations_sha256": {
-    "RUNTIME_CONTEXT_DECLARATION": "785f67f9fec422696d0cad49b698685aaebb946dbc778d404224fe5c39d4b76b",
-    "ENDPOINT_DECLARATION": "86e97696556b552ce69562f8a8c6cd7fafcc54fcf18739c7e03b2d8b1036bcc3"
-  },
-  "output": {
-    "path": "test/fixtures/somewhere-runtime-context.d.ts",
-    "bytes": 127890,
-    "sha256": "27d3a532690f3397bd42988cebc6ac4d1c2b3984676e9f270426f264c5060c1c"
-  },
-  "refresh": "Re-extract only from a reviewed platform commit and update this metadata; never hand-edit the .d.ts."
+  "purpose": "Frozen runtime context declarations for SDK type checks.",
+  "sha256": "8adfc02c999b838a3dde282a234bda6e72226a6cc9e483da6fca8c240cdd7cea"
 }
