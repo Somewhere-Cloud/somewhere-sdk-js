@@ -1,6 +1,6 @@
-// Sign-out intent lifetime (platform tsk_c09746b9; audit F4).
+// Sign-out intent lifetime (platform ; audit F4).
 //  - `pending:` (the server has not confirmed /logout) never expires: it is retried after any
-//    delay and keeps the page signed out (tsk_9b75bdf8 — must not regress).
+//    delay and keeps the page signed out ( — must not regress).
 //  - Once the server confirms /logout, the record is REMOVED. The server ended that session
 //    (session row and refresh family deleted), so its answer is the truth from then on. A
 //    session established afterwards by any path (a server form login, another client) is

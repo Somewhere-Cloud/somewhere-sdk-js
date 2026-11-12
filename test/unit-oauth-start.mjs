@@ -1,5 +1,5 @@
 /**
- * Browser-bound social sign-in through the packaged handler (platform tsk_ec24c4ba).
+ * Browser-bound social sign-in through the packaged handler (platform ).
  *
  * GET /<provider>-url awaits sw.auth.oauthStart(provider, { redirect_uri }),
  * which stages this attempt's HttpOnly verifier cookie on the response; the

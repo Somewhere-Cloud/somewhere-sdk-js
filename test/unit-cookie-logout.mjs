@@ -1,5 +1,5 @@
 /**
- * Cookie-mode sign-out answers 2xx only for a confirmed revocation (tsk_8d8751a9).
+ * Cookie-mode sign-out answers 2xx only for a confirmed revocation.
  *
  * The packaged handler's POST /logout in cookie mode calls the runtime's
  * sw.auth.logoutWithCookie. Only its { ok: true } is a confirmed sign-out. A

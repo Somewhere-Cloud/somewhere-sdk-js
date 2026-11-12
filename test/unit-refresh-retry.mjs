@@ -1,4 +1,4 @@
-// An interrupted refresh is a failed request (audit S2, platform tsk_c09746b9).
+// An interrupted refresh is a failed request (audit S2, platform ).
 // The server (core #1219) accepts a replay of a rotated refresh credential
 // within its grace window (10 s on in-band /me, 30 s on POST /refresh) and ends
 // only the replayed session after it. So the client keeps no "refresh outcome

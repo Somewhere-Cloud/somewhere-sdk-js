@@ -1,5 +1,5 @@
 /**
- * Header-mode sign-out revokes the server session (tsk_3fb8779c).
+ * Header-mode sign-out revokes the server session.
  *
  * The packaged client and the packaged server handler run together: the
  * client's fetch is answered by `somewhereAuth`, whose `sw.auth` stands in for

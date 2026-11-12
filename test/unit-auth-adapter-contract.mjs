@@ -259,7 +259,7 @@ check('OAuth starts go through oauthStart per provider, with callbacks under /ap
     return call?.args[1]?.redirect_uri === 'https://app.example/api/auth/callback';
   }));
 
-// ── Runtime response-contract generations (platform tsk_72c4b4d2, A-F05) ──
+// ── Runtime response-contract generations (platform , A-F05) ──
 // The matrix above runs against OLD-generation doubles (cookie helpers return
 // the BARE user). Runtime 2026081605+ returns the wrapped { user } envelope.
 // somewhereAuth must emit the identical flat { user, cookie_session } body

@@ -1,5 +1,5 @@
 /**
- * Email verification through the packaged handler (platform tsk_5b2ff298).
+ * Email verification through the packaged handler (platform ).
  *
  * GET /verify-email reports whether the signed-in account is verified;
  * POST /request-email-verification and POST /verify-email call the runtime's
