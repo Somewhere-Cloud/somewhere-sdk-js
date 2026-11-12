@@ -4,7 +4,7 @@ import { isAuthUser, mfaChallenge } from './continuation.js';
 /**
  * @somewhere-cloud/sdk/auth — framework-agnostic session client.
  *
- * ONLY-PATH CONTRACT (tsk_acd56ee8): a browser uses same-origin httpOnly
+ * ONLY-PATH CONTRACT: a browser uses same-origin httpOnly
  * cookie sessions and holds zero credentials. This package is an optional UI
  * adapter over that runtime contract, not a new transport.
  *
@@ -40,7 +40,7 @@ import { isAuthUser, mfaChallenge } from './continuation.js';
  * EXISTING stored header session is adopted as-is (no forced re-auth) and
  * migrates to cookies transparently on the next login.
  *
- * SESSION STATE AND ORDERING (tsk_166b8ddf): `getState()` and
+ * SESSION STATE AND ORDERING: `getState()` and
  * `onChange` report what the backend last said: 'checking' before any answer
  * (a cached user is unverified), 'authenticated', 'signed-out', or
  * 'indeterminate' when a check failed (network, 5xx, unreadable body) — the
@@ -313,8 +313,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   const authPath = (options.authPath ?? '/api/auth').replace(/\/$/, '');
   const storage = options.storage ?? defaultStorage();
   const key = options.storageKey ?? 'sw_auth';
-  const userKey = `${key}_user`; // cached user JSON for optimistic restore (tsk_1288e1c6)
-  // ONLY-PATH CONTRACT (tsk_acd56ee8): browsers use cookie sessions and keep
+  const userKey = `${key}_user`; // cached user JSON for optimistic restore
+  // ONLY-PATH CONTRACT: browsers use cookie sessions and keep
   // credentials out of page JavaScript. Header mode exists only for non-browser
   // clients and rule-9 compatibility with pre-0.2.0/older-handler sessions.
   const preferCookie = options.mode ? options.mode === 'cookie' : typeof document !== 'undefined';
@@ -605,7 +605,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     if (refreshTimer !== undefined) clearTimeout(refreshTimer);
     if (status !== 'authenticated' || readSignOutIntent()) return;
     // An unknown expiry is not an expired one: refreshing at once raced the page change that follows
-    // a sign-in (pfb_01e440702f31). The next session check learns the expiry (X-Sw-Access-Expires).
+    // a sign-in. The next session check learns the expiry (X-Sw-Access-Expires).
     if (delay === undefined) {
       if (!(accessExpiresAt > 0)) { nextRefreshAt = Number.POSITIVE_INFINITY; return; }
       delay = Math.max(0, accessExpiresAt - Date.now() - 10_000 - Math.random() * 3000);
@@ -813,7 +813,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       try { storage.removeItem(refreshStampKey); } catch { /* optional cross-tab coordination */ }
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       // Header mode must ASK for tokens: a handler answers a request without
-      // the hint with a cookie session only (pfb_e1254f754222).
+      // the hint with a cookie session only.
       headers[MODE_HINT_HEADER] = preferCookie ? 'cookie' : 'header';
       const res = await fetch(url(path), {
         method: 'POST',
@@ -853,7 +853,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       // Cookie mode was requested and the server did not confirm it: the
       // handler omitted cookie mode (a pasted or pre-0.2.0 handler). Storing the
       // tokens it returned would leave the session where page scripts can read
-      // it, so fail loudly and store nothing (pfb_961179f4970e).
+      // it, so fail loudly and store nothing.
       if (preferCookie) {
         throw new AuthError(
           `Sign-in reached ${url(path)} but the server did not confirm a cookie session, so nothing was stored. ` +

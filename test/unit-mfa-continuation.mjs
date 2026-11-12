@@ -206,7 +206,7 @@ try {
   } finally {globalThis.setTimeout=originalTimer;}
 }
 
-// Email sign-in codes (tsk_8fe91eb5): the copy names the emailed code, a pending sign-in can ask for a new code, and
+// Email sign-in codes: the copy names the emailed code, a pending sign-in can ask for a new code, and
 // the signed-in account turns codes on (enrol, verify) and off (password, then challenge_id and code) through the
 // app's auth route with its own session. The route runs the runtime's sw.auth.mfa.*WithCookie with the same request.
 {

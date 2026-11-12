@@ -1,6 +1,6 @@
 # Authentication convergence
 
-Decision record: 2026-07-28 (`tsk_acd56ee8`). For current application setup,
+Decision record: 2026-07-28 (``). For current application setup,
 start with the [SDK README](../README.md).
 
 ## Only-path contract

@@ -1,5 +1,5 @@
 // Pure, no-network unit tests for the DEFAULT-ON client query cache
-// (tsk_bbcbbad3 — productize prong A, "platform intelligence"). Covers:
+// ( — productize prong A, "platform intelligence"). Covers:
 // request dedup, ~1s staleTime cache, invalidate-on-write, the `.fresh()`
 // + `cache:false` opt-outs, prefetch warming, cache-key isolation, and the
 // no-shared-mutation guarantee. Executes current TypeScript source in memory;

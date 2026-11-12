@@ -1,4 +1,4 @@
-// Session status and ordering (tsk_166b8ddf). Pure, no network; runs
+// Session status and ordering. Pure, no network; runs
 // against the built package. Every race is driven with deferred responses so
 // the order is exact, and each guard has a same-generation control proving
 // genuine sign-outs and sign-ins still apply.

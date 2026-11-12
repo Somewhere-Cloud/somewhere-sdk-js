@@ -102,7 +102,7 @@ export function useAuth(): SomewhereAuth {
 export function SignedIn({ children }: { children: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
   if (state.signingOut) return null;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
+  if (loading && !user) return null; // cached user paints now; /me verifies in the background
   return user ? <>{children}</> : null;
 }
 
@@ -115,7 +115,7 @@ export function SignedIn({ children }: { children: React.ReactNode }) {
 export function SignedOut({ children, pending = null }: { children: React.ReactNode; pending?: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
   if (state.signingOut) return <>{pending}</>;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
+  if (loading && !user) return null; // cached user paints now; /me verifies in the background
   if (user) return null;
   return <>{children}</>;
 }
@@ -125,7 +125,7 @@ export function SignedOut({ children, pending = null }: { children: React.ReactN
 export function Protect({ children, fallback = null, pending = null }: { children: React.ReactNode; fallback?: React.ReactNode; pending?: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
   if (state.signingOut) return <>{pending}</>;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background (tsk_1288e1c6)
+  if (loading && !user) return null; // cached user paints now; /me verifies in the background
   if (user) return <>{children}</>;
   return <>{fallback}</>;
 }

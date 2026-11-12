@@ -128,9 +128,9 @@ last feature/breaking bump), the **minor** version is the breaking lever until
 - The default auth adapter preserves `AUTH_VERIFY_UNAVAILABLE` as a fixed
   503 response without forwarding runtime error text. The browser keeps its
   last-known user in an indeterminate state instead of treating the outage as
-  a sign-out (tsk_57b057218ccb4e898e6fff2581313dee).
+  a sign-out.
 - Limited mitigation for a refresh cut off by a page change (platform
-  tsk_8c5a0244): the session refresh request is sent with `keepalive`, so
+  ): the session refresh request is sent with `keepalive`, so
   navigating away no longer cancels a refresh that may already have rotated
   the session, and its cookies can still be stored. This is not full recovery
   from network loss: when the refresh response is lost, the outcome stays
@@ -150,7 +150,7 @@ last feature/breaking bump), the **minor** version is the breaking lever until
   behaviour is unchanged: the SDK sends the call and returns the server's
   answer as a Result.
 
-## 0.12.0 (2026-10-06) — browser-bound social sign-in (platform tsk_ec24c4ba)
+## 0.12.0 (2026-10-06) — browser-bound social sign-in (platform )
 
 ### Changed
 - `somewhereAuth` starts Google, GitHub and Discord sign-in with the runtime's

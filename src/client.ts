@@ -45,7 +45,7 @@ export class Client {
   /** The project's own URL (functions host), if known. See SomewhereOptions.functionsUrl. */
   readonly functionsUrl?: string;
   /**
-   * Session transport for `auth.*` (tsk_0de555b1). 'cookie' = httpOnly cookie
+   * Session transport for `auth.*`. 'cookie' = httpOnly cookie
    * sessions via the app's own backend routes — the browser default, because
    * localStorage tokens are XSS-exfiltratable and httpOnly cookies aren't.
    * 'header' = Bearer tokens in SDK memory — the default outside browsers

@@ -475,7 +475,7 @@ interface SomewhereRuntimeAuthModeration {
     user: { id: string; email: string; role: SomewhereAuthRole };
   }>;
 }
-// Email sign-in codes (tsk_8fe91eb5). Authenticator-app activation (reauthenticate*) answers 501 AUTH_FEATURE_UNAVAILABLE.
+// Email sign-in codes. Authenticator-app activation (reauthenticate*) answers 501 AUTH_FEATURE_UNAVAILABLE.
 type SomewhereMfaDelivery = 'sent' | 'pending' | 'unknown';
 interface SomewhereMfaCodeSent { challenge_id: string; delivery: SomewhereMfaDelivery; expires_in: number }
 type SomewhereMfaRecovery =
@@ -2357,7 +2357,7 @@ interface SomewhereRuntimePush {
   deliveries(options?: SomewherePushHistoryOptions): Promise<{ deliveries: SomewherePushDelivery[] }>;
 }
 
-// The push browser helper (tsk_80c0ed92). The compiler maps this specifier to
+// The push browser helper. The compiler maps this specifier to
 // the same-origin /__sw/push/client.js the project origin serves.
 declare module 'somewhere:push' {
   export interface PushDeviceResult {

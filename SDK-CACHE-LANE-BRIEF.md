@@ -1,6 +1,6 @@
 # Lane: SDK client cache (productize "A") — build only
 
-Autonomous BUILD lane in the SDK repo (`~/somewhere-sdks/somewhere-sdk-js`, branch `feat/cache`). This is the platform-intelligence flagship: make every app on somewhere fast-by-default so the developer never writes caching code. Founder GREENLIT **default-on**. Task: tsk_bbcbbad3 (productize prong A).
+Autonomous BUILD lane in the SDK repo (`~/somewhere-sdks/somewhere-sdk-js`, branch `feat/cache`). This is the platform-intelligence flagship: make every app on somewhere fast-by-default so the developer never writes caching code. Founder GREENLIT **default-on**. Task:  (productize prong A).
 
 ## HARD GUARDRAILS
 - **NEVER publish** (no `npm publish`, no version tag push). Build + test + commit to `feat/cache`. The FOUNDER reviews before any publish — changing default fetch semantics is a breaking change.
@@ -25,4 +25,4 @@ A client cache layer in the query path. The cache hooks into `src/resources/post
 
 ## GATE + HANDOFF
 - Build: `npm run build` (or the repo's build) must succeed; `npm test` (the repo's tests) must pass — and ADD tests for: dedup (two concurrent awaits → one fetch), staleTime (repeat read within window served from cache), invalidate-on-write (write then read → fresh), opt-out (`cache:false` always fetches).
-- Commit to `feat/cache` referencing tsk_bbcbbad3. STOP + write `SDK-CACHE-HANDOFF.md`: the API surface, the semver bump + why, test results, the docs/sales files written, and exactly what the founder must review before publish.
+- Commit to `feat/cache` referencing . STOP + write `SDK-CACHE-HANDOFF.md`: the API surface, the semver bump + why, test results, the docs/sales files written, and exactly what the founder must review before publish.

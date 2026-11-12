@@ -1,5 +1,5 @@
 // Pure, no-network unit tests for the projects allowed-origins control
-// (B-O11, tsk_76ef4c8b). Runs against the built ESM in dist/esm. No SMT_KEY /
+// (B-O11, ). Runs against the built ESM in dist/esm. No SMT_KEY /
 // network required. The platform is the single normalization/authorization/
 // audit authority — the SDK forwards exact origins verbatim.
 //

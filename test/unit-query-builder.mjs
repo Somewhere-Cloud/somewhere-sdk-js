@@ -1,5 +1,5 @@
 // Pure, no-network unit tests for the query-builder parity work
-// (tsk_4a462e29): count modes (exact + head), nested FK select (now
+//: count modes (exact + head), nested FK select (now
 // resolved server-side — the SDK sends the select verbatim and the worker
 // returns nested rows), and single() / maybeSingle().
 //

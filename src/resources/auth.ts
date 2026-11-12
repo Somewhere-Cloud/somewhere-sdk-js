@@ -23,7 +23,7 @@ import type {
  *
  * Method names are retained for existing SDK callers.
  *
- * ONLY-PATH CONTRACT (tsk_acd56ee8):
+ * ONLY-PATH CONTRACT:
  *
  * - COOKIE (the browser default, 0.6.0): sign-in posts to your app's own
  *   backend auth routes (`authPath`, default '/api/auth' — the standard

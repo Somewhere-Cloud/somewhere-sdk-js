@@ -1,5 +1,5 @@
 /**
- * The session cookie is the DEFAULT, not a header opt-in (platform tsk_d05a6cfb).
+ * The session cookie is the DEFAULT, not a header opt-in (platform ).
  *
  * THE HOLE: somewhereAuth only called sw.auth.setSessionCookies when the caller
  * sent `X-Sw-Auth-Mode: cookie`. The @somewhere-cloud/sdk/auth client sends it; a
@@ -12,7 +12,7 @@
  * THE FIX under test: a successful sign-in always stages the httpOnly pair when
  * the runtime can mint it. The header now selects the RESPONSE BODY only.
  *
- * pfb_e1254f754222 (0.10.0): a caller with no mode header no longer receives
+ *  (0.10.0): a caller with no mode header no longer receives
  * the token pair in the body — only the cookie handshake. Tokens are returned
  * ONLY on the explicit `X-Sw-Auth-Mode: header` (or `token`) opt-in, and a
  * runtime that cannot set the cookie refuses instead of returning tokens.

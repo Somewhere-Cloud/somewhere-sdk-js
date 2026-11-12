@@ -1,4 +1,4 @@
-// Early session check (platform tsk_c09746b9): the page starts the client's
+// Early session check (platform ): the page starts the client's
 // first GET /api/auth/me during HTML parse and the client adopts that answer.
 // Proves, both directions, with the REAL inline script source and the built client:
 //  - adopted: one /me in total, signed-in and signed-out alike;

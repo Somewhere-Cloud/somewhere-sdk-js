@@ -1,6 +1,6 @@
 /**
  * Typed compile-check ("typed source of truth") for the public SDK surface,
- * focused on the v0.5.0 DEFAULT-ON query cache (tsk_bbcbbad3 — productize
+ * focused on the v0.5.0 DEFAULT-ON query cache ( — productize
  * prong A). This file is TYPECHECKED by `npm test` (tsc -p tsconfig.test.json),
  * not executed — its job is to prove the documented cache API type-checks
  * exactly as the README shows it. Runtime behaviour is covered by

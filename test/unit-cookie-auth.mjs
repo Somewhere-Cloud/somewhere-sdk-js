@@ -1,4 +1,4 @@
-// Pure, no-network unit tests for cookie-mode auth (v0.6.0, tsk_0de555b1):
+// Pure, no-network unit tests for cookie-mode auth (v0.6.0, ):
 // browser-default httpOnly cookie sessions. Runs against the built ESM in
 // dist/esm. No SMT_KEY / network required.
 //

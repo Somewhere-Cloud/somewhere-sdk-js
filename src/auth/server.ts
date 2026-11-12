@@ -19,7 +19,7 @@ import { mfaChallenge } from './continuation.js';
  * `__Host-` cookies and answers `{ user, cookie_session: true }` — tokens
  * never reach page JS. That is the answer for every caller that does not opt
  * out, including a plain `fetch('/api/auth/login', { credentials: 'include' })`
- * with no header (pfb_e1254f754222). Only an explicit
+ * with no header. Only an explicit
  * `X-Sw-Auth-Mode: header` (aliases `token`, `bearer`) — a server or native
  * client that holds its own session — receives the token pair in the body, and
  * then no cookie is set. A runtime that cannot set the cookie refuses
@@ -69,7 +69,7 @@ export interface SwAuthNamespace {
     discordExchange(opts: { code: string; attempt?: string }): Promise<unknown>;
     signInWithOtp(opts: { email: string; redirect_uri?: string }): Promise<unknown>;
     verifyOtp(opts: { token: string }): Promise<unknown>;
-    /** Cookie-session primitives (tsk_1dd4e1b4) — optional so the handler
+    /** Cookie-session primitives — optional so the handler
      *  degrades to token bodies on runtimes that predate them. */
     setSessionCookies?(access: string, refresh: string): void;
     logoutWithCookie?(req: Request): Promise<unknown>;
@@ -152,7 +152,7 @@ interface TokenBundle {
  * access token actually issued; else the issuer's expires_in. Every cookie-mode session reply carries
  * it, so the client schedules its refresh from the real expiry. A reply without one made the client
  * refresh at once, and a page change mid-refresh orphaned its pending marker (platform
- * pfb_01e440702f31). Undefined only when the bundle says nothing about expiry.
+ * ). Undefined only when the bundle says nothing about expiry.
  */
 function issuedExpiresAt(d: TokenBundle): number | undefined {
   if (typeof d.expires_at === 'number' && Number.isFinite(d.expires_at) && d.expires_at > 0) return d.expires_at;
@@ -168,7 +168,7 @@ function issuedExpiresAt(d: TokenBundle): number | undefined {
 }
 
 /**
- * Runtime response-contract compatibility (platform tsk_72c4b4d2, A-F05).
+ * Runtime response-contract compatibility (platform , A-F05).
  * Runtime 2026081605+ cookie helpers return the documented { user } envelope;
  * older baked bundles return the bare user object (or null). Accept both so
  * one SDK version serves projects on either runtime generation.
@@ -188,7 +188,7 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
   const sub = (m && m[1]) || '/';
   const method = req.method.toUpperCase();
 
-  // SESSION COOKIES ARE THE ONLY DEFAULT (platform tsk_d05a6cfb, pfb_e1254f754222).
+  // SESSION COOKIES ARE THE ONLY DEFAULT (platform , ).
   //
   // A browser must never receive the token pair: a body the page can read is
   // a session any injected script can steal. Before 0.10.0 a caller with no

@@ -1,4 +1,4 @@
-// Early session check (platform tsk_c09746b9).
+// Early session check (platform ).
 //
 // A cookie-session page cannot know who is signed in until its bundle has
 // downloaded, run, mounted, and asked GET <authPath>/me. This module provides

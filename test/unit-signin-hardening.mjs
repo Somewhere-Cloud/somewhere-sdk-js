@@ -1,10 +1,10 @@
 // Sign-in hardening (0.9.0). Pure, no-network; runs against the built package.
 //
-//   1. pfb_961179f4970e — a cookie-mode client whose server does not confirm
+//   1.  — a cookie-mode client whose server does not confirm
 //      `cookie_session: true` throws a typed AuthError and stores NOTHING;
 //      a confirmed cookie session writes no token to storage; explicit
 //      header mode still stores its pair (both directions).
-//   2. pfb_3bbdbee14d7d — the packaged /billing/checkout and /billing/portal
+//   2.  — the packaged /billing/checkout and /billing/portal
 //      routes call sw.payments.checkoutForUser(opts) / portalForUser(opts),
 //      the runtime's actual signature, against a stub that behaves like the
 //      runtime (worker/src/runtime/payments.ts): the user is derived, not
