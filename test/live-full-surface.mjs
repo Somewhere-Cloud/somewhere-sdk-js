@@ -91,12 +91,16 @@ async function httpDirect(method, path, body) {
 }
 
 async function fetchDeleteCode(pid) {
-  const envText = readFileSync('/Users/uzair/somewhere-tech/.env', 'utf-8');
+  const envFile = process.env.SOMEWHERE_TEST_ENV_FILE;
+  const accountId = process.env.SOMEWHERE_TEST_CF_ACCOUNT_ID;
+  const databaseId = process.env.SOMEWHERE_TEST_D1_DATABASE_ID;
+  if (!envFile || !accountId || !databaseId) return null;
+  const envText = readFileSync(envFile, 'utf-8');
   const pick = (n) => envText.match(new RegExp(`^${n}=(.+)$`, 'm'))?.[1]?.trim();
   const email = pick('CF_GLOBAL_KEY_EMAIL'), apiKey = pick('CF_GLOBAL_API_KEY');
   if (!email || !apiKey) return null;
   const sql = `SELECT code FROM delete_confirmations WHERE target_id = '${pid}' AND used_at IS NULL ORDER BY created_at DESC LIMIT 1`;
-  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/b40a6657ef9b59a7bbc7fdf3f271a667/d1/database/a1a13e63-7579-4d4b-b1f3-e7ae8746dfbe/query`, {
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/query`, {
     method: 'POST',
     headers: { 'X-Auth-Email': email, 'X-Auth-Key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sql }),
