@@ -2,17 +2,17 @@
 
 Official JavaScript and TypeScript client for [Somewhere Cloud](https://somewhere.cloud).
 
-This package was published as `@somewhere-cloud/sdk` through 0.12.10; those versions stay installable.
-
 For a browser application's database, start with the schema-generated client that the platform builds from `db/schema.ts`:
 
 ```ts
 import { data } from 'somewhere:data'
 
 const page = await data.notes.list({ limit: 20 })
-await data.notes.create({ title: 'First note' })
-await data.notes.update(noteId, { done: true })
-await data.notes.remove(noteId)
+const created = await data.notes.create({ title: 'First note', body: '' })
+if (created.data) {
+  await data.notes.update(created.data.id, { body: 'Updated note' })
+  await data.notes.delete(created.data.id)
+}
 ```
 
 The generated client exposes only the operations and fields declared in each
@@ -41,38 +41,43 @@ import { somewhereAuth } from '@somewhere-cloud/sdk/server'
 
 ## Browser auth and functions
 
-Browser sessions use same-origin httpOnly cookies. Page JavaScript holds no developer key or session token. Mount the standard auth handler in your application at `/api/auth`, then create a credential-free browser client:
+The auth starter mounts this handler at `api/auth/[...path].ts`:
+
+```ts
+export { somewhereAuth as default } from '@somewhere-cloud/sdk/server'
+```
+
+Its `src/services/auth.ts` shares one auth instance:
+
+```ts
+import { createSomewhereAuth } from '@somewhere-cloud/sdk/auth'
+
+export const auth = createSomewhereAuth()
+```
+
+Forms call `auth.signIn({ email, password })`, `auth.signUp({ email, password })`
+and `auth.signOut()`. Keep the starter's pending, error and email-code handling.
+Browser sessions use same-origin httpOnly cookies; do not put developer keys in
+browser code. Use the generated `somewhere:data` client for declared data and
+same-origin application functions for trusted logic.
+
+For the explicit function client:
 
 ```ts
 import { createClient } from '@somewhere-cloud/sdk'
 
-const client = createClient('https://booking-app.somewhere.site', undefined, {
-  projectId: 'booking-app',
+const client = createClient('https://app.example.com', undefined, {
+  projectId: 'your-project-id',
 })
-
-const { data, error } = await client.auth.signInWithPassword({
-  email: 'person@example.com',
-  password,
-})
-
 const result = await client.functions.invoke('checkout', {
   body: { plan: 'pro' },
 })
 ```
 
-`functions.invoke(name, options)` calls `/api/<name>` on the application URL,
-includes browser cookies, and returns `{ data, error }`. Current
-`.somewhere.site` and custom-domain URLs require an explicit `projectId` for
-project-resource calls. Automatic project-id inference is retained only for
-legacy `*.somewhere.tech` application URLs.
-
-```ts
-const client = createClient('https://app.example.com', undefined, {
-  projectId: 'booking-app',
-})
-```
-
-The auth client also provides signup, magic-link, OAuth, sign-out, password reset, user lookup, session lookup, and auth-state subscriptions. Cookie mode is the browser default. Non-browser clients can select `{ authMode: 'header' }` and manage bearer-session rotation explicitly.
+`functions.invoke` calls the app's `/api/<name>`, includes browser cookies and
+returns `{ data, error }`. Supply a project ID explicitly for platform-resource
+calls. Non-browser clients can select `{ authMode: 'header' }` and manage bearer
+sessions explicitly.
 
 ## Server and non-browser client
 
@@ -92,16 +97,17 @@ const rows = await client.db.query(
 )
 ```
 
-Never expose an `smt_` developer key in browser code. Inside a deployed Somewhere Cloud function, use the supplied runtime instead of constructing an SDK client:
+Never expose an `smt_` developer key in browser code. Inside a deployed Somewhere Cloud function, use the supplied runtime. This public, read-only endpoint follows the minimal starter; authenticated product endpoints need their own declared access rules:
 
 ```ts
-export default async function (request, sw) {
-  const result = await sw.db.from('orders', {
-    where: { status: 'pending' },
-    limit: 20,
-  })
-  return Response.json(result.data)
-}
+// api/greeting.ts, with a greetings table scoped to serverOnly()
+export default sw.endpoint({
+  auth: 'none',
+  handler: async (_input, sw) => {
+    const result = await sw.db.from('greetings', { limit: 1 })
+    return { message: result.data[0]?.message ?? 'Hello' }
+  },
+})
 ```
 
 The explicit client retains these established namespaces:
@@ -152,15 +158,14 @@ const signed = await avatars.createSignedUrl('user-42.png', 3600)
 
 Use a server/non-browser credential for private file reads and writes. Public and signed URLs can be consumed by browsers.
 
-For browser uploads where each user (or team) sees only their own files, declare a file collection in `db/schema.ts` and use the generated `somewhere:files` client instead of this SDK: see `docs({ topic: 'declared-files' })`.
+For browser uploads where each user (or team) sees only their own files, declare a file collection in `db/schema.ts` and use the generated `somewhere:files` client instead of this SDK: run `somewhere docs declared-files`.
 
 ## Browser live views
 
-For live browser interfaces, declare a named `sw.db.live` view and use the
-browser subscription helper. That surface is a platform capability, not an SDK
-one; see `docs({ topic: 'live' })` for its scope limits:
-member and policy scopes are not subscribable, and relation-filtered live views
-are refused.
+For live browser interfaces, declare a named `sw.rooms.live` view and use the
+`watchLive` helper from `somewhere:rooms`. That surface is a platform capability, not an SDK
+one. Define the read and access rules in your server function, then consume
+the returned live descriptor in the browser.
 
 ## Error handling
 
@@ -189,4 +194,4 @@ npm test
 
 ## License
 
-MIT © somewhere.tech
+MIT © Somewhere HQ, Inc.
