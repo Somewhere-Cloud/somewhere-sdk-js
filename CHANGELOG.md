@@ -6,6 +6,17 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## Unreleased
+
+### Fixed
+
+- The `somewhereAuth` handler keeps a refusal's retry delay. When the platform
+  answers with `retry_after_ms` (the sign-in lockout after repeated wrong
+  passwords, and rate limits), the response now carries `retry_after_ms` in the
+  body and a `Retry-After` header in whole seconds (rounded up), with the same
+  status, `error` and `message` as before. Refusals without a delay answer
+  exactly as before.
+
 ## 0.14.1
 
 ### Changed

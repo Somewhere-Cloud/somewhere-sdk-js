@@ -498,6 +498,17 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       return json({ error: 'AUTH_VERIFY_UNAVAILABLE', message: 'Identity verification is temporarily unavailable. Please retry.' }, 503);
     }
     const status = (err as { status?: number })?.status ?? 400;
-    return json({ error: 'AUTH_ERROR', message: (err as Error)?.message || 'Auth failed' }, status);
+    const message = (err as Error)?.message || 'Auth failed';
+    // A refusal that names when a later attempt is accepted (the platform's sign-in lockout and rate
+    // limits) keeps that value, and says it in the standard header too, so a client can wait instead
+    // of guessing.
+    const retryAfterMs = (err as { retry_after_ms?: unknown })?.retry_after_ms;
+    if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+      return new Response(JSON.stringify({ error: 'AUTH_ERROR', message, retry_after_ms: retryAfterMs }), {
+        status,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) },
+      });
+    }
+    return json({ error: 'AUTH_ERROR', message }, status);
   }
 }
