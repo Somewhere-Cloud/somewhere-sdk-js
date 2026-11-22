@@ -25,7 +25,7 @@ export class Client {
         this.defaultProjectId = opts.projectId;
         this.authHeader = `Bearer ${opts.key ?? opts.token}`;
         this.extraHeaders = opts.headers ?? {};
-        const f = opts.fetch ?? globalThis.fetch;
+        const f = opts.fetch ?? globalThis.fetch?.bind(globalThis);
         if (!f) {
             throw new Error('Somewhere: no fetch implementation found. Pass `fetch` explicitly.');
         }

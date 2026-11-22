@@ -22,6 +22,21 @@ for (const [format, sdk] of [['ESM', esm], ['CommonJS', cjs]]) {
   await send(new sdk.Somewhere({ key: 'smt_synthetic_fixture', projectId: 'fixture', baseUrl: 'https://api.somewhere.tech/v1/', fetch }), 'https://api.somewhere.tech/v1/email/send');
   await send(new sdk.Somewhere({ key: 'smt_synthetic_fixture', projectId: 'fixture', baseUrl: 'https://api.example.invalid/v1', fetch }), 'https://api.example.invalid/v1/email/send');
   await send(sdk.createClient('https://fixture.somewhere.site', 'smt_synthetic_fixture', { projectId: 'fixture', fetch }), 'https://api.somewhere.cloud/v1/email/send');
+  const originalFetch = globalThis.fetch;
+  let ambientCalls = 0;
+  globalThis.fetch = function (url, init) {
+    assert.equal(this, globalThis, 'ambient fetch requires its global receiver');
+    ambientCalls++;
+    return fetch(url, init);
+  };
+  try {
+    await send(sdk.createClient('https://fixture.somewhere.site', 'smt_synthetic_fixture', { projectId: 'fixture' }), 'https://api.somewhere.cloud/v1/email/send');
+    assert.equal(ambientCalls, 1);
+    await send(sdk.createClient('https://fixture.somewhere.site', 'smt_synthetic_fixture', { projectId: 'fixture', fetch }), 'https://api.somewhere.cloud/v1/email/send');
+    assert.equal(ambientCalls, 1, 'injected fetch takes precedence');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
   const custom = sdk.createClient('https://customer.example.invalid', 'smt_synthetic_fixture', { projectId: 'fixture', apiUrl: 'https://api.somewhere.tech/v1', fetch });
   await send(custom, 'https://api.somewhere.tech/v1/email/send');
   await custom.functions.invoke('checkout');

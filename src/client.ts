@@ -98,7 +98,7 @@ export class Client {
     this.initialAuthHeader = initialCredential ? `Bearer ${initialCredential}` : null;
     this.initialAuthKind = opts.key ? 'key' : opts.token ? 'token' : 'none';
     this.extraHeaders = opts.headers ?? {};
-    const f = opts.fetch ?? (globalThis as { fetch?: FetchLike }).fetch;
+    const f = opts.fetch ?? (globalThis as { fetch?: FetchLike }).fetch?.bind(globalThis);
     if (!f) {
       throw new Error('Somewhere: no fetch implementation found. Pass `fetch` explicitly.');
     }

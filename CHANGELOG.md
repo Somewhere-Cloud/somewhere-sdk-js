@@ -6,6 +6,12 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.14.3
+
+### Fixed
+
+- `createClient()` binds the ambient `fetch` to `globalThis`, so browsers that refuse an unbound native `fetch` ("Illegal invocation") make calls normally (tsk_0a8c35f3).
+
 ## 0.14.2
 
 ### Fixed
