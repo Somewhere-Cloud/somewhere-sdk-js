@@ -173,7 +173,19 @@ async function main() {
   }
 
   console.log('');
-  if (failures > 0) {
+  // The Supabase-compatible storage alias sends the same JSON request as REST.
+{
+  const rec = recorder(() => ({ json: { ok: true, data: { url: 'https://example.test/download' } } }));
+  const sw = new Somewhere({ key: 'fixture', projectId: 'myapp', fetch: rec.fetchImpl });
+  const bucket = sw.storage.from('avatars');
+  const signed = await bucket.createSignedUrl('me.png', 3600);
+  await eq('createSignedUrl request body', rec.calls.at(-1)?.body, { path: '/avatars/me.png', expires_in: 3600 });
+  await eq('createSignedUrl alias', signed.data?.signedUrl, 'https://example.test/download');
+  await bucket.integrityCheck({ autoClean: true, cursor: 'next', limit: 3 });
+  await eq('integrityCheck request body', rec.calls.at(-1)?.body, { auto_clean: true, limit: 3, cursor: 'next' });
+}
+
+if (failures > 0) {
     console.error(`❌ ${failures} assertion(s) failed`);
     process.exit(1);
   }

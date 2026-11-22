@@ -161,7 +161,7 @@ export class StorageFileApi {
     try {
       const body: Record<string, unknown> = { path: '/' + fullPath };
       if (typeof options.expiresIn === 'number') body.expires_in = options.expiresIn;
-      const res = await this.client.call('POST', `/fs/${enc(projectId)}/sign`, body);
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/sign`, { body });
       return { data: res as SignedUrlResult, error: null, status: 200 };
     } catch (err) {
       return toResultError(err);
@@ -196,7 +196,7 @@ export class StorageFileApi {
       if (options.autoClean === true) body.auto_clean = true;
       if (typeof options.limit === 'number') body.limit = options.limit;
       if (typeof options.cursor === 'string') body.cursor = options.cursor;
-      const res = await this.client.call('POST', `/fs/${enc(projectId)}/integrity-check`, body);
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/integrity-check`, { body });
       return { data: res as IntegrityCheckResult, error: null, status: 200 };
     } catch (err) {
       return toResultError(err);
