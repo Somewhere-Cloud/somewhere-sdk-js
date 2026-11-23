@@ -131,6 +131,21 @@ async function main() {
     await eq('returns the signed URL', res.data?.signedUrl, url);
   }
 
+  console.log('storage.integrityCheck');
+  {
+    const rec = recorder();
+    const sw = createClient('https://demo.somewhere.tech', 'smt_dev', { fetch: rec.fetchImpl });
+    const files = sw.storage.from('avatars');
+    await files.integrityCheck();
+    await eq('default integrity check body', rec.calls.at(-1).body, {});
+    await files.integrityCheck({ autoClean: true, limit: 25, cursor: 'next' });
+    const call = rec.calls.at(-1);
+    await eq('integrity check endpoint', new URL(call.url).pathname, '/v1/fs/demo/integrity-check');
+    await eq('method', call.method, 'POST');
+    await eq('content type', call.headers['Content-Type'], 'application/json');
+    await eq('integrity check body', call.body, { auto_clean: true, limit: 25, cursor: 'next' });
+  }
+
   /* ── auth.onAuthStateChange ────────────────────────────────────── */
   console.log('auth.onAuthStateChange');
   {

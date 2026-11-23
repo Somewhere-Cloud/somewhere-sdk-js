@@ -196,7 +196,7 @@ export class StorageFileApi {
       if (options.autoClean === true) body.auto_clean = true;
       if (typeof options.limit === 'number') body.limit = options.limit;
       if (typeof options.cursor === 'string') body.cursor = options.cursor;
-      const res = await this.client.call('POST', `/fs/${enc(projectId)}/integrity-check`, body);
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/integrity-check`, { body });
       return { data: res as IntegrityCheckResult, error: null, status: 200 };
     } catch (err) {
       return toResultError(err);

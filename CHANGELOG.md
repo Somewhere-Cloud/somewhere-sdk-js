@@ -12,6 +12,7 @@ last feature/breaking bump), the **minor** version is the breaking lever until
 
 - The SDK binds a caller-supplied `fetch` to `globalThis`, so passing the browser's native `fetch` works for auth and other requests.
 - `storage.from(bucket).signedUrl()` and `createSignedUrl()` send the file path and requested expiry in the JSON body.
+- `storage.from(bucket).integrityCheck()` sends its options in the JSON body, including an empty body object when called without options.
 
 ## 0.14.3
 
