@@ -6,6 +6,13 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.14.4
+
+### Fixed
+
+- The SDK binds a caller-supplied `fetch` to `globalThis`, so passing the browser's native `fetch` works for auth and other requests.
+- `storage.from(bucket).signedUrl()` and `createSignedUrl()` send the file path and requested expiry in the JSON body.
+
 ## 0.14.3
 
 ### Fixed

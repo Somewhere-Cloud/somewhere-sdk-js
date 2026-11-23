@@ -117,6 +117,20 @@ async function main() {
     check('5xx → {data:null,error}', res.data === null && res.error?.code === 'BOOM' && res.error?.statusCode === 500);
   }
 
+  console.log('storage.createSignedUrl');
+  {
+    const url = 'https://download.example.invalid/signed';
+    const rec = recorder(() => ({ json: { ok: true, data: { url } } }));
+    const sw = createClient('https://demo.somewhere.tech', 'eyJ.jwt', { fetch: rec.fetchImpl });
+    const res = await sw.storage.from('avatars').createSignedUrl('user.png', 60);
+    const call = rec.calls.at(-1);
+    await eq('signing endpoint', new URL(call.url).pathname, '/v1/fs/demo/sign');
+    await eq('method', call.method, 'POST');
+    await eq('content type', call.headers['Content-Type'], 'application/json');
+    await eq('signing body', call.body, { path: '/avatars/user.png', expires_in: 60 });
+    await eq('returns the signed URL', res.data?.signedUrl, url);
+  }
+
   /* ── auth.onAuthStateChange ────────────────────────────────────── */
   console.log('auth.onAuthStateChange');
   {

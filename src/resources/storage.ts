@@ -161,7 +161,7 @@ export class StorageFileApi {
     try {
       const body: Record<string, unknown> = { path: '/' + fullPath };
       if (typeof options.expiresIn === 'number') body.expires_in = options.expiresIn;
-      const res = await this.client.call('POST', `/fs/${enc(projectId)}/sign`, body);
+      const res = await this.client.call('POST', `/fs/${enc(projectId)}/sign`, { body });
       return { data: res as SignedUrlResult, error: null, status: 200 };
     } catch (err) {
       return toResultError(err);
