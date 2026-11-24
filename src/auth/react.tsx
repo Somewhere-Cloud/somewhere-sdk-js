@@ -9,8 +9,8 @@
  *   const user = useUser();           // null | User
  *   const auth = useAuth();           // actions + auth.fetch
  *
- * The provider hydrates the user once on mount (validating + refreshing the
- * session) and re-renders on every login / logout / token rotation.
+ * The provider observes the client's session check and re-renders on
+ * login, logout and token rotation.
  */
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -46,14 +46,8 @@ export function SomewhereAuthProvider(props: {
   // Create the client exactly once.
   const auth = useMemo(() => props.client ?? createSomewhereAuth(props.options), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [state, setState] = useState<AuthState>(() => auth.getState());
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const off = auth.onChange(setState);
-    // Validate + refresh the session against the backend on mount.
-    auth.getUser().finally(() => setLoading(false));
-    return off;
-  }, [auth]);
+  const loading = state.status === 'checking';
+  useEffect(() => auth.onChange(setState), [auth]);
 
   const value = useMemo<AuthContextValue>(
     () => ({ state, user: state.user, session: state.session, loading, auth }),
@@ -76,7 +70,7 @@ function useAuthContext(): AuthContextValue {
  */
 export function useAuthState(): AuthState & { recheck(): Promise<User | null> } {
   const { state, auth } = useAuthContext();
-  return useMemo(() => ({ ...state, recheck: auth.getUser }), [state, auth]);
+  return useMemo(() => ({ ...state, recheck: auth.recheck }), [state, auth]);
 }
 
 /** The current user, or null. Re-renders on login/logout/rotation. */

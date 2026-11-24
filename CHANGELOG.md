@@ -6,6 +6,12 @@ This project is pre-1.0. Following the repo convention (0.3.0 → 0.4.0 was the
 last feature/breaking bump), the **minor** version is the breaking lever until
 1.0.0. So a default-semantics change bumps the minor.
 
+## 0.14.5
+
+### Fixed
+
+- The browser auth client checks the session as soon as it is created. A concurrent `getUser()` or `recheck()` shares the request. Tests can wait for `data-sw-auth` on the document root to become `signed-in` or `signed-out`.
+
 ## 0.14.4
 
 ### Fixed

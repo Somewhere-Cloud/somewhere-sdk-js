@@ -256,6 +256,8 @@ export interface SomewhereAuth {
   signOut(): Promise<void>;
   /** Re-fetch the current user from the backend (validates + refreshes). */
   getUser(): Promise<User | null>;
+  /** Retry the session check. Shares an in-flight check with getUser(). */
+  recheck(): Promise<User | null>;
   /** Current session from memory (no network). Always null for a cookie
    *  session — the tokens are httpOnly, deliberately unreadable from JS;
    *  use getCachedUser()/getUser() for signed-in state. */
@@ -308,6 +310,7 @@ function mutationTimeout(value: unknown): number {
   return value;
 }
 
+/** Create a client. In the browser, the initial session check starts automatically. */
 export function createSomewhereAuth(options: SomewhereAuthOptions = {}): SomewhereAuth {
   const baseUrl = (options.baseUrl ?? '').replace(/\/$/, '');
   const authPath = (options.authPath ?? '/api/auth').replace(/\/$/, '');
@@ -468,9 +471,25 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return { status, user, session, error, signOutUnconfirmed: owedSignOut !== null, signingOut: signOutsInFlight > 0 };
   }
 
+  let announcedReady = false;
+  function publishBrowserAuth() {
+    const root = typeof document === 'undefined' ? undefined : document.documentElement;
+    if (!root) return;
+    const marker = signOutsInFlight > 0 ? 'checking'
+      : owedSignOut ? 'indeterminate'
+      : status === 'authenticated' ? 'signed-in'
+      : status;
+    root.setAttribute('data-sw-auth', marker);
+    if (!announcedReady && (marker === 'signed-in' || marker === 'signed-out')) {
+      announcedReady = true;
+      root.dispatchEvent(new Event('sw-auth-ready', { bubbles: true }));
+    }
+  }
+
   function emit() {
     const state = snapshot();
     for (const l of listeners) l(state);
+    publishBrowserAuth();
   }
 
   /** ATOMIC: persist the whole session as one value, or clear it. There is no
@@ -1183,6 +1202,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       });
     },
     getUser,
+    recheck: getUser,
     getSession: () => session,
     getCachedUser: () => user,
     getState: snapshot,
@@ -1243,6 +1263,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       },
     },
   };
+  publishBrowserAuth();
+  if (typeof document !== 'undefined' && (status === 'checking' || owedSignOut)) void getUser();
   return client;
 }
 
