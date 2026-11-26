@@ -11,6 +11,12 @@ last feature/breaking bump), the **minor** version is the breaking lever until
 ### Fixed
 
 - The browser auth client checks the session as soon as it is created. A concurrent `getUser()` or `recheck()` shares the request. Tests can wait for `data-sw-auth` on the document root to become `signed-in` or `signed-out`.
+- `SomewhereAuthProvider` verifies the session on mount, including with a shared client. A default provider in React Strict Mode makes one initial request and fires `sw-auth-ready` once.
+- A confirmed sign-out clears the pending sign-out state in other tabs, even when their user cache is already empty.
+
+### Changed
+
+- `SignedIn` and `Protect` wait for a confirmed session before rendering protected children. During verification, `SignedIn` renders nothing and `Protect` renders its `pending` prop, which defaults to nothing. `Protect` renders `fallback` if verification finishes without a confirmed session.
 
 ## 0.14.4
 

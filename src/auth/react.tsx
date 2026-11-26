@@ -9,13 +9,13 @@
  *   const user = useUser();           // null | User
  *   const auth = useAuth();           // actions + auth.fetch
  *
- * The provider observes the client's session check and re-renders on
+ * The provider checks the session on mount and re-renders on
  * login, logout and token rotation.
  */
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AuthError,
-  createSomewhereAuth,
+  createAuthClient,
   type SomewhereAuth,
   type SomewhereAuthOptions,
   type User,
@@ -43,16 +43,38 @@ export function SomewhereAuthProvider(props: {
   client?: SomewhereAuth;
   children: React.ReactNode;
 }) {
-  // Create the client exactly once.
-  const auth = useMemo(() => props.client ?? createSomewhereAuth(props.options), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const [state, setState] = useState<AuthState>(() => auth.getState());
-  const loading = state.status === 'checking';
-  useEffect(() => auth.onChange(setState), [auth]);
-
-  const value = useMemo<AuthContextValue>(
-    () => ({ state, user: state.user, session: state.session, loading, auth }),
-    [state, loading, auth],
+  const { client: auth, startBrowser } = useMemo(
+    () => props.client ? { client: props.client, startBrowser: undefined } : createAuthClient(props.options),
+    [], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  const [observed, setObserved] = useState<AuthState>(() => auth.getState());
+  const [mountChecked, setMountChecked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const off = auth.onChange(setObserved);
+    startBrowser?.();
+    // A fresh client already started its check. Reuse it, or verify a shared
+    // client again if its previous check has completed.
+    void auth.getUser().finally(() => {
+      if (active) setMountChecked(true);
+    });
+    return () => {
+      active = false;
+      off();
+    };
+  }, [auth, startBrowser]);
+
+  const value = useMemo<AuthContextValue>(() => {
+    const state = mountChecked ? observed : { ...observed, status: 'checking' as const };
+    return {
+      state,
+      user: mountChecked ? state.user : null,
+      session: state.session,
+      loading: state.status === 'checking',
+      auth,
+    };
+  }, [observed, mountChecked, auth]);
   return <AuthContext.Provider value={value}>{props.children}</AuthContext.Provider>;
 }
 
@@ -94,10 +116,8 @@ export function useAuth(): SomewhereAuth {
 }
 
 export function SignedIn({ children }: { children: React.ReactNode }) {
-  const { user, loading, state } = useAuthContext();
-  if (state.signingOut) return null;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background
-  return user ? <>{children}</> : null;
+  const { state } = useAuthContext();
+  return !state.signingOut && state.status === 'authenticated' ? <>{children}</> : null;
 }
 
 /**
@@ -109,18 +129,17 @@ export function SignedIn({ children }: { children: React.ReactNode }) {
 export function SignedOut({ children, pending = null }: { children: React.ReactNode; pending?: React.ReactNode }) {
   const { user, loading, state } = useAuthContext();
   if (state.signingOut) return <>{pending}</>;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background
+  if (loading) return null;
   if (user) return null;
   return <>{children}</>;
 }
 
-/** Gate a subtree behind auth; shows `fallback` (default null) when signed
- *  out, and `pending` (default null) while a signOut() awaits the server. */
+/** Gate a subtree behind a confirmed session. Shows `pending` while checking
+ *  or signing out and `fallback` without a confirmed session (both default to null). */
 export function Protect({ children, fallback = null, pending = null }: { children: React.ReactNode; fallback?: React.ReactNode; pending?: React.ReactNode }) {
-  const { user, loading, state } = useAuthContext();
-  if (state.signingOut) return <>{pending}</>;
-  if (loading && !user) return null; // cached user paints now; /me verifies in the background
-  if (user) return <>{children}</>;
+  const { loading, state } = useAuthContext();
+  if (state.signingOut || loading) return <>{pending}</>;
+  if (state.status === 'authenticated') return <>{children}</>;
   return <>{fallback}</>;
 }
 
