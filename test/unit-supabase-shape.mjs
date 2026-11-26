@@ -117,6 +117,35 @@ async function main() {
     check('5xx → {data:null,error}', res.data === null && res.error?.code === 'BOOM' && res.error?.statusCode === 500);
   }
 
+  console.log('storage.createSignedUrl');
+  {
+    const url = 'https://download.example.invalid/signed';
+    const rec = recorder(() => ({ json: { ok: true, data: { url } } }));
+    const sw = createClient('https://demo.somewhere.tech', 'eyJ.jwt', { fetch: rec.fetchImpl });
+    const res = await sw.storage.from('avatars').createSignedUrl('user.png', 60);
+    const call = rec.calls.at(-1);
+    await eq('signing endpoint', new URL(call.url).pathname, '/v1/fs/demo/sign');
+    await eq('method', call.method, 'POST');
+    await eq('content type', call.headers['Content-Type'], 'application/json');
+    await eq('signing body', call.body, { path: '/avatars/user.png', expires_in: 60 });
+    await eq('returns the signed URL', res.data?.signedUrl, url);
+  }
+
+  console.log('storage.integrityCheck');
+  {
+    const rec = recorder();
+    const sw = createClient('https://demo.somewhere.tech', 'smt_dev', { fetch: rec.fetchImpl });
+    const files = sw.storage.from('avatars');
+    await files.integrityCheck();
+    await eq('default integrity check body', rec.calls.at(-1).body, {});
+    await files.integrityCheck({ autoClean: true, limit: 25, cursor: 'next' });
+    const call = rec.calls.at(-1);
+    await eq('integrity check endpoint', new URL(call.url).pathname, '/v1/fs/demo/integrity-check');
+    await eq('method', call.method, 'POST');
+    await eq('content type', call.headers['Content-Type'], 'application/json');
+    await eq('integrity check body', call.body, { auto_clean: true, limit: 25, cursor: 'next' });
+  }
+
   /* ── auth.onAuthStateChange ────────────────────────────────────── */
   console.log('auth.onAuthStateChange');
   {

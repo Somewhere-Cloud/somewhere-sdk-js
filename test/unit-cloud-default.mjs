@@ -34,6 +34,20 @@ for (const [format, sdk] of [['ESM', esm], ['CommonJS', cjs]]) {
     assert.equal(ambientCalls, 1);
     await send(sdk.createClient('https://fixture.somewhere.site', 'smt_synthetic_fixture', { projectId: 'fixture', fetch }), 'https://api.somewhere.cloud/v1/email/send');
     assert.equal(ambientCalls, 1, 'injected fetch takes precedence');
+
+    for (const options of [{}, { fetch: globalThis.fetch }]) {
+      const sw = sdk.createClient('https://fixture.somewhere.site', undefined, { authMode: 'cookie', ...options });
+      const user = await sw.auth.getUser();
+      assert.equal(user.error, null);
+      assert.equal(user.status, 200);
+      assert.equal(calls.at(-1).url, '/api/auth/me');
+      assert.equal(calls.at(-1).init.credentials, 'include');
+
+      const invoked = await sw.functions.invoke('checkout');
+      assert.equal(invoked.error, null);
+      assert.equal(calls.at(-1).url, 'https://fixture.somewhere.site/api/checkout');
+      assert.equal(calls.at(-1).init.credentials, 'include');
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
