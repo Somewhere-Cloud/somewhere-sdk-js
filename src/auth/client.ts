@@ -256,6 +256,8 @@ export interface SomewhereAuth {
   signOut(): Promise<void>;
   /** Re-fetch the current user from the backend (validates + refreshes). */
   getUser(): Promise<User | null>;
+  /** Retry the session check. Shares an in-flight check with getUser(). */
+  recheck(): Promise<User | null>;
   /** Current session from memory (no network). Always null for a cookie
    *  session — the tokens are httpOnly, deliberately unreadable from JS;
    *  use getCachedUser()/getUser() for signed-in state. */
@@ -308,7 +310,15 @@ function mutationTimeout(value: unknown): number {
   return value;
 }
 
+/** Create a client. In the browser, the initial session check starts automatically. */
 export function createSomewhereAuth(options: SomewhereAuthOptions = {}): SomewhereAuth {
+  const { client, startBrowser } = createAuthClient(options);
+  startBrowser();
+  return client;
+}
+
+/** Build a client whose browser startup can wait for a React commit. */
+export function createAuthClient(options: SomewhereAuthOptions = {}) {
   const baseUrl = (options.baseUrl ?? '').replace(/\/$/, '');
   const authPath = (options.authPath ?? '/api/auth').replace(/\/$/, '');
   const storage = options.storage ?? defaultStorage();
@@ -468,9 +478,25 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     return { status, user, session, error, signOutUnconfirmed: owedSignOut !== null, signingOut: signOutsInFlight > 0 };
   }
 
+  let announcedReady = false;
+  function publishBrowserAuth() {
+    const root = typeof document === 'undefined' ? undefined : document.documentElement;
+    if (!root) return;
+    const marker = signOutsInFlight > 0 ? 'checking'
+      : owedSignOut ? 'indeterminate'
+      : status === 'authenticated' ? 'signed-in'
+      : status;
+    root.setAttribute('data-sw-auth', marker);
+    if (!announcedReady && (marker === 'signed-in' || marker === 'signed-out')) {
+      announcedReady = true;
+      root.dispatchEvent(new Event('sw-auth-ready', { bubbles: true }));
+    }
+  }
+
   function emit() {
     const state = snapshot();
     for (const l of listeners) l(state);
+    publishBrowserAuth();
   }
 
   /** ATOMIC: persist the whole session as one value, or clear it. There is no
@@ -565,38 +591,42 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
   // multi-tab refresh footgun this package exists to kill). A different
   // identity is NOT trusted: status goes to 'checking' and /me re-checks.
   // key === null means storage.clear().
-  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('storage', (e: StorageEvent) => {
-      if (e.key !== null && e.key !== key && e.key !== userKey && e.key !== signOutKey) return;
-      const intent = readSignOutIntent();
-      if (intent) {
-        generation++;
-        writeSession(null);
-        owedSignOut = intent.startsWith('pending:')
-          ? { session: null, error: new AuthError('Sign-out has not been confirmed by the server.', 0, 'SIGN_OUT_UNCONFIRMED') } : null;
+  function syncStorage(e: StorageEvent) {
+    if (e.key !== null && e.key !== key && e.key !== userKey && e.key !== signOutKey) return;
+    const intent = readSignOutIntent();
+    if (intent) {
+      generation++;
+      writeSession(null);
+      owedSignOut = intent.startsWith('pending:')
+        ? { session: null, error: new AuthError('Sign-out has not been confirmed by the server.', 0, 'SIGN_OUT_UNCONFIRMED') } : null;
+      settle('signed-out', null);
+      return;
+    }
+    const nextSession = loadSession();
+    const nextUser = nextSession || preferCookie ? loadUser() : null;
+    const identityChanged = (nextUser?.id ?? null) !== (user?.id ?? null) || !nextSession !== !session;
+    const signOutSettled = e.key === signOutKey && owedSignOut !== null;
+    if (signOutSettled) owedSignOut = null;
+    if (!identityChanged) {
+      if (signOutSettled) {
         settle('signed-out', null);
         return;
       }
-      const nextSession = loadSession();
-      const nextUser = nextSession || preferCookie ? loadUser() : null;
-      const identityChanged = (nextUser?.id ?? null) !== (user?.id ?? null) || !nextSession !== !session;
-      if (!identityChanged) {
-        if (nextSession?.accessToken !== session?.accessToken || nextSession?.refreshToken !== session?.refreshToken) {
-          session = nextSession;
-          accessExpiresAt = nextSession ? tokenExpiry(nextSession.accessToken) : 0;
-          scheduleRefresh();
-          emit();
-        }
-        return;
+      if (nextSession?.accessToken !== session?.accessToken || nextSession?.refreshToken !== session?.refreshToken) {
+        session = nextSession;
+        accessExpiresAt = nextSession ? tokenExpiry(nextSession.accessToken) : 0;
+        scheduleRefresh();
+        emit();
       }
-      generation++;
-      session = nextSession;
-      user = nextUser;
-      status = 'checking';
-      error = null;
-      emit();
-      void getUser();
-    });
+      return;
+    }
+    generation++;
+    session = nextSession;
+    user = nextUser;
+    status = 'checking';
+    error = null;
+    emit();
+    void getUser();
   }
 
   // Standard short access-token refresh. Timers are an optimization: a resumed
@@ -660,8 +690,8 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
     refreshFlight = enqueue(run).finally(() => { refreshFlight = null; refreshInBackground = false; });
     return refreshFlight;
   }
-  if (typeof window !== 'undefined') {
-    window.addEventListener('focus', () => { if (status === 'authenticated' && Date.now() >= nextRefreshAt) void refreshSession(true).catch(() => undefined); });
+  function refreshOnFocus() {
+    if (status === 'authenticated' && Date.now() >= nextRefreshAt) void refreshSession(true).catch(() => undefined);
   }
 
   // A background refresh starts while the held access token is still valid (10-13 s before
@@ -1005,6 +1035,10 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
         if (check?.promise === promise) check = null;
       });
     check = { generation: started, promise };
+    if (status === 'authenticated') {
+      status = 'checking';
+      emit();
+    }
     return promise;
   }
 
@@ -1183,6 +1217,7 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       });
     },
     getUser,
+    recheck: getUser,
     getSession: () => session,
     getCachedUser: () => user,
     getState: snapshot,
@@ -1243,7 +1278,18 @@ export function createSomewhereAuth(options: SomewhereAuthOptions = {}): Somewhe
       },
     },
   };
-  return client;
+  let startedBrowser = false;
+  function startBrowser() {
+    if (startedBrowser) return;
+    startedBrowser = true;
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', syncStorage);
+      window.addEventListener('focus', refreshOnFocus);
+    }
+    publishBrowserAuth();
+    if (typeof document !== 'undefined' && (status === 'checking' || owedSignOut)) void getUser();
+  }
+  return { client, startBrowser };
 }
 
 export class AuthError extends Error {

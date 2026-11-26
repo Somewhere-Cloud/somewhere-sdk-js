@@ -55,6 +55,17 @@ import { createSomewhereAuth } from '@somewhere-cloud/sdk/auth'
 export const auth = createSomewhereAuth()
 ```
 
+In the browser the client checks the session as soon as it is created.
+Subscribe with `auth.onChange()` or read `useAuthState()` inside
+`SomewhereAuthProvider`. Render private UI after `authenticated` and offer a
+retry with `auth.recheck()` on `indeterminate`. A concurrent `getUser()`
+shares the check.
+
+In Playwright, wait with
+`await page.locator('html[data-sw-auth="signed-in"], html[data-sw-auth="signed-out"]').waitFor({ state: 'attached' })`.
+The first confirmed state also fires a bubbling `sw-auth-ready` event from
+`document.documentElement`.
+
 Forms call `auth.signIn({ email, password })`, `auth.signUp({ email, password })`
 and `auth.signOut()`. Keep the starter's pending, error and email-code handling.
 Browser sessions use same-origin httpOnly cookies; do not put developer keys in

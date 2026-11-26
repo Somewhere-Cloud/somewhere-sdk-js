@@ -14,6 +14,8 @@ import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = await mkdtemp(join(tmpdir(), 'sdk-signout-'));
 let failLogout = false;
+let meRequests = 0;
+let meGate;
 let failLogin = false;
 let loginDelay = 0;
 let logoutDelays = [];
@@ -29,6 +31,8 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify(body));
   };
   if (path === '/api/auth/me') {
+    meRequests++;
+    if (meGate) await meGate;
     return reply({ user: req.headers.cookie?.includes('fixture_session=yes') ? { id: 'fixture-user', email: 'fixture@example.invalid' } : null });
   }
   if (path === '/api/auth/login') {
@@ -83,6 +87,84 @@ try {
     await page.getByTestId('logout').waitFor();
     return { context, page };
   };
+  const failures = [];
+  async function regression(name, run) {
+    const context = await browser.newContext();
+    try {
+      await context.addCookies([{ name: 'fixture_session', value: 'yes', url: origin, httpOnly: true }]);
+      await run(context);
+      console.log('PASS', name);
+    } catch (error) {
+      failures.push(name);
+      console.error('FAIL', name, error.message);
+    } finally {
+      await context.close();
+    }
+  }
+  await regression('shared provider remount verifies the session again', async context => {
+    const page = await context.newPage();
+    await page.goto(origin + '?variant=shared');
+    await page.getByTestId('private').waitFor();
+    await context.clearCookies();
+    const before = meRequests;
+    const firstPaint = await page.evaluate(() => {
+      window.fixtureRemount();
+      return document.querySelector('[data-testid="status"]').textContent;
+    });
+    assert.equal(firstPaint, 'checking', 'the remount must not expose the previous authenticated state');
+    await page.getByTestId('natural-form').waitFor({ timeout: 3000 });
+    assert.equal(meRequests - before, 1);
+  });
+  await regression('other tab settles confirmed sign-out with an empty cache', async context => {
+    const first = await context.newPage();
+    await first.goto(origin);
+    await first.getByTestId('private').waitFor();
+    const second = await context.newPage();
+    await second.goto(origin);
+    await second.getByTestId('private').waitFor();
+    await first.getByTestId('logout').click();
+    await second.locator('html[data-sw-auth="indeterminate"]').waitFor({ state: 'attached' });
+    await first.getByTestId('natural-form').waitFor();
+    await second.locator('html[data-sw-auth="signed-out"]').waitFor({ state: 'attached', timeout: 3000 });
+    assert.equal(await second.getByTestId('unconfirmed').innerText(), 'false');
+    assert.equal(await second.getByTestId('signedout-form').count(), 1);
+  });
+  await regression('Strict Mode makes one session request and emits ready once', async context => {
+    await context.addInitScript(() => {
+      window.fixtureReady = 0;
+      document.addEventListener('sw-auth-ready', () => { window.fixtureReady++; });
+    });
+    const before = meRequests;
+    const page = await context.newPage();
+    await page.goto(origin + '?variant=strict');
+    await page.getByTestId('private').waitFor();
+    await page.waitForLoadState('networkidle');
+    assert.deepEqual({ requests: meRequests - before, ready: await page.evaluate(() => window.fixtureReady) },
+      { requests: 1, ready: 1 });
+  });
+  await regression('SignedIn and Protect stay hidden during cached-user verification', async context => {
+    await context.addInitScript(() => {
+      localStorage.setItem('sw_auth_user', JSON.stringify({ id: 'cached-user', email: 'cached@example.invalid' }));
+    });
+    let releaseMe;
+    meGate = new Promise(resolve => { releaseMe = resolve; });
+    const page = await context.newPage();
+    try {
+      await page.goto(origin);
+      await page.getByTestId('natural-loading').waitFor();
+      assert.equal(await page.getByTestId('cached-user').innerText(), 'cached-user');
+      assert.deepEqual({
+        signedIn: await page.getByTestId('private').count(),
+        protected: await page.getByTestId('protected-private').count(),
+      }, { signedIn: 0, protected: 0 });
+    } finally {
+      releaseMe();
+      meGate = undefined;
+    }
+    await page.getByTestId('private').waitFor();
+    assert.equal(await page.getByTestId('protected-private').count(), 1);
+  });
+  assert.deepEqual(failures, [], 'browser auth regressions');
   // The reported handwritten consumer uses only user truthiness and does not
   // await signOut. Reload immediately when that consumer exposes the auth form.
   for (let n = 0; n < 3; n++) {

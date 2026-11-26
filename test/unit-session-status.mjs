@@ -84,6 +84,33 @@ async function settled(promise) {
 
 // ---------------------------------------------------------------- status map
 
+for (const user of [A, null]) {
+  browser();
+  const markers = new Map();
+  const events = [];
+  document.documentElement = {
+    setAttribute: (name, value) => markers.set(name, value),
+    dispatchEvent: (event) => events.push(event.type),
+  };
+  const reply = deferred();
+  const calls = server({ '/api/auth/me': () => reply.promise });
+  const auth = createSomewhereAuth();
+  const settled = deferred();
+  auth.onChange(({ status }) => {
+    if (status !== 'checking') settled.resolve(status);
+  });
+  await tick();
+  check('construction starts one check without getUser', calls.length === 1 && markers.get('data-sw-auth') === 'checking' && events.length === 0);
+  const concurrent = user ? auth.getUser() : undefined;
+  if (concurrent) check('recheck and getUser share the initial request', auth.recheck() === concurrent);
+  reply.resolve(json(200, { user }));
+  check('subscription settles automatically', await settled.promise === (user ? 'authenticated' : 'signed-out'));
+  await tick();
+  check('readiness publishes one event and the confirmed state', events.join() === 'sw-auth-ready' && markers.get('data-sw-auth') === (user ? 'signed-in' : 'signed-out') && calls.length === 1);
+  await auth.recheck();
+  check('later recheck reads the session again without repeating the readiness event', calls.length === 2 && events.length === 1);
+}
+
 {
   browser({ cachedUser: A });
   server({ '/api/auth/me': () => json(200, { user: A }) });
@@ -542,7 +569,7 @@ for (const [label, respond] of [
   const threw = bad.filter((value) => { try { createSomewhereAuth({ mutationTimeoutMs: value }); return false; } catch (e) { return e instanceof RangeError; } });
   check('invalid mutationTimeoutMs values throw RangeError', threw.length === bad.length, { threw: threw.map(String) });
   let ok = true;
-  for (const value of [1, 2_147_483_647, undefined]) { try { createSomewhereAuth({ mutationTimeoutMs: value }); } catch { ok = false; } }
+  for (const value of [1, 2_147_483_647, undefined]) { try { createSomewhereAuth({ mode: 'header', mutationTimeoutMs: value }); } catch { ok = false; } }
   check('control: 1, 2147483647 and the default are accepted', ok);
 }
 
