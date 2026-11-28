@@ -375,6 +375,21 @@ export async function somewhereAuth(req: Request, sw: SwAuthNamespace): Promise<
       try { return json(await sw.auth.refreshSession(req)); } catch (err) { return verificationFailed(err); }
     }
     if (method === 'GET' && sub === '/me') {
+      // ?app_roles=1: the user also carries appRoles, the caller's own app-role names read fresh by
+      // the runtime (a hint for the page; every action is still checked on the server). Opt-in, so a
+      // plain session check never pays for the role read. A runtime that predates the option returns
+      // the user without appRoles; a failed role read answers with its own code, never "no roles".
+      if (url.searchParams.get('app_roles') === '1') {
+        try {
+          const user = await sw.auth.fromRequest(req, { appRoles: true });
+          return json({ user: user ?? null });
+        } catch (err) {
+          const e = err as { code?: unknown; status?: unknown; message?: unknown };
+          const status = typeof e.status === 'number' && e.status >= 400 && e.status < 600 ? e.status : 503;
+          return json({ error: typeof e.code === 'string' ? e.code : 'APP_ROLES_UNAVAILABLE',
+            message: typeof e.message === 'string' ? e.message : 'The app roles could not be read.' }, status);
+        }
+      }
       const user = await sw.auth.fromRequest(req);
       return json({ user: user ?? null });
     }
