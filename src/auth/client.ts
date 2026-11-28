@@ -666,7 +666,13 @@ export function createAuthClient(options: SomewhereAuthOptions = {}) {
       // grace window, and a later one ends only this session).
       const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal, keepalive: !preferCookie });
       if (started !== generation || signal.aborted || readSignOutIntent()) return;
-      if (res.status === 401) {
+      // An unclassified 403 can come from an intermediary. A coded 403 is
+      // the auth handler's refusal, including account suspension.
+      const refusal = res.status === 403
+        ? await res.json().catch(() => null) as { error?: unknown } | null
+        : null;
+      if (started !== generation || signal.aborted || readSignOutIntent()) return;
+      if (res.status === 401 || (res.status === 403 && refusal?.error !== undefined)) {
         writeSession(null); settle('signed-out', null); return;
       }
       if (!res.ok) throw new AuthError('Session refresh unavailable.', res.status);

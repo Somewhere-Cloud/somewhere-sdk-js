@@ -164,11 +164,18 @@ for (const [label, respond, code] of [
     u?.id === A.id && calls.length === 1 && !values.has(marker));
 }
 
-for (const status of [403, 429, 503]) {
+for (const [status, error, signedOut] of [
+  [403, undefined, false],
+  [403, 'AUTH_BANNED', true],
+  [403, 'UNKNOWN_AUTH_REFUSAL', true],
+  [401, 'AUTH_INVALID_CREDS', true],
+  [429, 'RATE_LIMITED', false],
+  [503, 'AUTH_VERIFY_UNAVAILABLE', false],
+]) {
   browser({ cachedUser: A });
   const calls = server({
     '/api/auth/me': () => json(200, { user: A }),
-    '/api/auth/refresh': () => json(status, { error: 'REFRESH_DENIED' }),
+    '/api/auth/refresh': () => json(status, { error }),
   });
   const auth = createSomewhereAuth();
   await auth.getUser();
@@ -177,8 +184,10 @@ for (const status of [403, 429, 503]) {
   Date.now = () => now() + 61_000;
   try {
     await settled(auth.fetch('/api/protected'));
-    check(`refresh ${status} preserves the cached identity`, calls.some((c) => c.path === '/api/auth/refresh')
-      && auth.getState().status === 'authenticated' && auth.getCachedUser()?.id === A.id);
+    check(`refresh ${status} ${error ?? '(uncoded)'} ${signedOut ? 'clears' : 'preserves'} the cached identity`,
+      calls.some((c) => c.path === '/api/auth/refresh')
+      && auth.getState().status === (signedOut ? 'signed-out' : 'authenticated')
+      && (signedOut ? auth.getCachedUser() === null : auth.getCachedUser()?.id === A.id));
   } finally { Date.now = now; }
 }
 
