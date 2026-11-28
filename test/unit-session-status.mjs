@@ -147,6 +147,50 @@ for (const [label, respond, code] of [
   check(`/me ${label} → indeterminate, last-known user kept, error ${code}`,
     s.status === 'indeterminate' && s.user?.id === 'usr_a' && u?.id === 'usr_a' && s.error?.code === 'SESSION_CHECK_FAILED' && s.error.status === code, s);
 }
+// Reopening after an interrupted proactive refresh: the access cookie has
+// expired, but the refresh cookie remains valid.
+{
+  const { values } = browser({ cachedUser: A });
+  const marker = 'sw_auth_user:refresh-pending';
+  values.set(marker, (Date.now() - 61_000) + ':interrupted');
+  const calls = server({
+    '/api/auth/me': (init) => json(200, {
+      user: init.credentials === 'include' && !new Headers(init.headers).has('X-No-Auto-Refresh') ? A : null,
+    }),
+  });
+  const auth = createSomewhereAuth();
+  const u = await auth.getUser();
+  check('a stale pending marker cannot stop the returning page from renewing once',
+    u?.id === A.id && calls.length === 1 && !values.has(marker));
+}
+
+for (const [status, error, signedOut] of [
+  [403, undefined, false],
+  [403, 'AUTH_BANNED', true],
+  [403, 'UNKNOWN_AUTH_REFUSAL', true],
+  [401, 'AUTH_INVALID_CREDS', true],
+  [429, 'RATE_LIMITED', false],
+  [503, 'AUTH_VERIFY_UNAVAILABLE', false],
+]) {
+  browser({ cachedUser: A });
+  const calls = server({
+    '/api/auth/me': () => json(200, { user: A }),
+    '/api/auth/refresh': () => json(status, { error }),
+  });
+  const auth = createSomewhereAuth();
+  await auth.getUser();
+  // Run a protected request after its proactive refresh time has passed.
+  const now = Date.now;
+  Date.now = () => now() + 61_000;
+  try {
+    await settled(auth.fetch('/api/protected'));
+    check(`refresh ${status} ${error ?? '(uncoded)'} ${signedOut ? 'clears' : 'preserves'} the cached identity`,
+      calls.some((c) => c.path === '/api/auth/refresh')
+      && auth.getState().status === (signedOut ? 'signed-out' : 'authenticated')
+      && (signedOut ? auth.getCachedUser() === null : auth.getCachedUser()?.id === A.id));
+  } finally { Date.now = now; }
+}
+
 // The default server adapter keeps the runtime's verification outage as a
 // fixed 503 (never 200 { user: null }); the client keeps the last-known user.
 {
