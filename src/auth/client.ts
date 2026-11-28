@@ -666,7 +666,7 @@ export function createAuthClient(options: SomewhereAuthOptions = {}) {
       // grace window, and a later one ends only this session).
       const res = await fetch(url('/refresh'), { method: 'POST', credentials: 'include', headers, signal, keepalive: !preferCookie });
       if (started !== generation || signal.aborted || readSignOutIntent()) return;
-      if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
         writeSession(null); settle('signed-out', null); return;
       }
       if (!res.ok) throw new AuthError('Session refresh unavailable.', res.status);
